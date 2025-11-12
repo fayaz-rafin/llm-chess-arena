@@ -15,6 +15,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "LLM Chess Arena",
   description: "Watch two language models battle it out on a 3D chessboard.",
+  icons: {
+    icon: "/chess-pieces/B_Knight.png",
+  },
 };
 
 export default function RootLayout({

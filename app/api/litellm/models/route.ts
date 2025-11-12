@@ -4,7 +4,7 @@ const normalizeBaseUrl = (raw: string) => raw.trim().replace(/\/$/, "");
 
 const extractModels = (payload: unknown): Array<{
   id: string;
-  label?: string;
+  label?: string | undefined;
   provider?: string | null;
 }> => {
   if (!payload || typeof payload !== "object") return [];
@@ -31,13 +31,22 @@ const extractModels = (payload: unknown): Array<{
       const id = candidate.id || candidate.model || candidate.name;
       if (!id) return null;
 
-      return {
+      const label = candidate.name || candidate.description || candidate.id || candidate.model;
+      const provider = candidate.provider || candidate.owned_by || null;
+
+      const result: { id: string; label?: string; provider?: string | null } = {
         id,
-        label: candidate.name || candidate.description || candidate.id || candidate.model,
-        provider: candidate.provider || candidate.owned_by || null,
       };
+      
+      if (label) {
+        result.label = label;
+      }
+      
+      result.provider = provider;
+
+      return result;
     })
-    .filter((entry): entry is { id: string; label?: string; provider?: string | null } => Boolean(entry));
+    .filter((entry): entry is { id: string; label?: string; provider?: string | null } => entry !== null);
 };
 
 export async function POST(request: NextRequest) {

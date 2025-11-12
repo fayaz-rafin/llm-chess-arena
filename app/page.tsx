@@ -342,6 +342,12 @@ type ModelPreset = {
 
 const MODEL_PRESETS: ReadonlyArray<ModelPreset> = [
   {
+    id: "openai-gpt-4o",
+    label: "OpenAI · GPT-4o",
+    model: "gpt-4o",
+    baseUrl: "https://api.openai.com/v1",
+  },
+  {
     id: "openai-gpt-5",
     label: "OpenAI · GPT-5",
     model: "gpt-5",
@@ -392,6 +398,8 @@ export default function Home() {
   const gameRef = useRef<ChessGame | null>(null);
   const isPlayingRef = useRef(false);
   const sceneReadyRef = useRef(false);
+  const moveListRef = useRef<HTMLDivElement | null>(null);
+  const turnInProgressRef = useRef(false);
 
   const [status, setStatus] = useState("Initializing arena...");
   const [isPlaying, setIsPlaying] = useState(false);
@@ -608,61 +616,71 @@ export default function Home() {
   const scheduleNextTurn = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const playNextTurn = useCallback(async () => {
-    const game = gameRef.current;
-    if (!game || game.gameOver || !isPlayingRef.current) {
+    if (turnInProgressRef.current) {
       return;
     }
 
-    const legalMoves = game.getAllPossibleMoves();
-    if (legalMoves.length === 0) {
-      game.gameOver = true;
-      const winner = game.turn === "white" ? "black" : "white";
-      game.winner = winner;
-      const winnerLabel = winner.charAt(0).toUpperCase() + winner.slice(1);
-      setStatus(`${winnerLabel} wins by stalemate!`);
-      setIsPlaying(false);
-      isPlayingRef.current = false;
-      return;
-    }
+    turnInProgressRef.current = true;
 
-    const config = game.turn === "white" ? whiteConfig : blackConfig;
-    setStatus(`Consulting ${game.turn} LLM (${config.model})...`);
+    try {
+      const game = gameRef.current;
+      if (!game || game.gameOver || !isPlayingRef.current) {
+        return;
+      }
 
-    const moveFromLlm = await fetchLlmMove(
-      game.turn,
-      legalMoves,
-      game.serializeBoard(),
-      [...game.moves],
-      config
-    );
+      const legalMoves = game.getAllPossibleMoves();
+      if (legalMoves.length === 0) {
+        game.gameOver = true;
+        const winner = game.turn === "white" ? "black" : "white";
+        game.winner = winner;
+        const winnerLabel = winner.charAt(0).toUpperCase() + winner.slice(1);
+        setStatus(`${winnerLabel} wins by stalemate!`);
+        setIsPlaying(false);
+        isPlayingRef.current = false;
+        return;
+      }
 
-    const move = moveFromLlm ?? legalMoves[Math.floor(Math.random() * legalMoves.length)];
+      const config = game.turn === "white" ? whiteConfig : blackConfig;
+      setStatus(`Consulting ${game.turn} LLM (${config.model})...`);
 
-    const [fromRow, fromCol] = move.from;
-    const [toRow, toCol] = move.to;
-    movePieceInScene(fromRow, fromCol, toRow, toCol);
-    const summary = game.makeMove(fromRow, fromCol, toRow, toCol);
-    if (summary) {
-      setMoveHistory((prev) => [...prev, summary]);
-      if (summary.captured) {
-        const capturedPiece = summary.captured;
-        if (summary.color === "white") {
-          setCapturedByWhite((prev) => [...prev, capturedPiece]);
-        } else {
-          setCapturedByBlack((prev) => [...prev, capturedPiece]);
+      const moveFromLlm = await fetchLlmMove(
+        game.turn,
+        legalMoves,
+        game.serializeBoard(),
+        [...game.moves],
+        config
+      );
+
+      const move = moveFromLlm ?? legalMoves[Math.floor(Math.random() * legalMoves.length)];
+
+      const [fromRow, fromCol] = move.from;
+      const [toRow, toCol] = move.to;
+      movePieceInScene(fromRow, fromCol, toRow, toCol);
+      const summary = game.makeMove(fromRow, fromCol, toRow, toCol);
+      if (summary) {
+        setMoveHistory((prev) => [...prev, summary]);
+        if (summary.captured) {
+          const capturedPiece = summary.captured;
+          if (summary.color === "white") {
+            setCapturedByWhite((prev) => [...prev, capturedPiece]);
+          } else {
+            setCapturedByBlack((prev) => [...prev, capturedPiece]);
+          }
         }
       }
-    }
-    updateFromGame(game);
+      updateFromGame(game);
 
-    if (!game.gameOver && isPlayingRef.current) {
-      if (scheduleNextTurn.current) {
-        clearTimeout(scheduleNextTurn.current);
+      if (!game.gameOver && isPlayingRef.current) {
+        if (scheduleNextTurn.current) {
+          clearTimeout(scheduleNextTurn.current);
+        }
+        scheduleNextTurn.current = setTimeout(playNextTurn, moveDelay);
+      } else if (game.gameOver) {
+        setIsPlaying(false);
+        isPlayingRef.current = false;
       }
-      scheduleNextTurn.current = setTimeout(playNextTurn, moveDelay);
-    } else if (game.gameOver) {
-      setIsPlaying(false);
-      isPlayingRef.current = false;
+    } finally {
+      turnInProgressRef.current = false;
     }
   }, [blackConfig, fetchLlmMove, moveDelay, movePieceInScene, updateFromGame, whiteConfig]);
 
@@ -757,6 +775,7 @@ export default function Home() {
 
     return () => {
       isPlayingRef.current = false;
+      turnInProgressRef.current = false;
       if (scheduleNextTurn.current) {
         clearTimeout(scheduleNextTurn.current);
       }
@@ -796,6 +815,12 @@ export default function Home() {
     }
   }, [isPlaying, playNextTurn]);
 
+  useEffect(() => {
+    if (moveListRef.current) {
+      moveListRef.current.scrollTop = moveListRef.current.scrollHeight;
+    }
+  }, [moveHistory]);
+
   const handleStart = () => {
     if (!sceneReadyRef.current || isPlayingRef.current) return;
     isPlayingRef.current = true;
@@ -815,6 +840,7 @@ export default function Home() {
   const handleReset = () => {
     isPlayingRef.current = false;
     setIsPlaying(false);
+    turnInProgressRef.current = false;
 
     if (!sceneReadyRef.current) return;
 
@@ -972,7 +998,7 @@ export default function Home() {
         className="pointer-events-auto absolute left-6 top-6 flex max-h-[calc(100vh-3rem)] w-[min(24rem,90vw)] flex-col overflow-hidden rounded-xl border border-white/10 bg-black/60 text-sm shadow-2xl backdrop-blur-lg"
       >
         <div className="flex-1 overflow-y-auto p-6 pr-3">
-          <h1 className="text-2xl font-semibold">♟️ AI Chess Battle</h1>
+          <h1 className="text-2xl font-semibold">♟️ LLM Chess Arena ♟️</h1>
           <p className="mt-2 text-teal-300">{status}</p>
 
           <div className="mt-4 space-y-3">
@@ -1021,39 +1047,6 @@ export default function Home() {
                   className="ml-2 w-20 rounded bg-white/10 px-2 py-1 text-right text-white placeholder-white/40 focus:outline-none"
                 />
               </label>
-            </div>
-
-            <div className="space-y-2 rounded-lg border border-white/10 bg-white/5 p-3">
-              <p className="text-xs uppercase tracking-wide text-white/60">LiteLLM Catalog (optional)</p>
-              <input
-                type="text"
-                placeholder="https://your-litellm-host"
-                value={liteLlmBaseUrl}
-                onChange={(event) => setLiteLlmBaseUrl(event.target.value)}
-                className="w-full rounded border border-white/10 bg-black/30 px-3 py-2 text-white placeholder-white/40 focus:outline-none"
-              />
-              <input
-                type="password"
-                placeholder="LiteLLM API key (if required)"
-                value={liteLlmApiKey}
-                onChange={(event) => setLiteLlmApiKey(event.target.value)}
-                className="w-full rounded border border-white/10 bg-black/30 px-3 py-2 text-white placeholder-white/40 focus:outline-none"
-              />
-              <div className="flex flex-col gap-2 md:flex-row md:items-center">
-                <button
-                  onClick={loadLiteLlmModels}
-                  disabled={isLoadingLiteLlm}
-                  className="rounded-md bg-teal-500 px-3 py-2 text-sm font-semibold text-slate-900 transition hover:bg-teal-400 disabled:cursor-not-allowed disabled:bg-slate-500"
-                >
-                  {isLoadingLiteLlm ? "Fetching..." : "Fetch models"}
-                </button>
-                {liteLlmStatus && (
-                  <span className="text-[11px] text-white/60">{liteLlmStatus}</span>
-                )}
-              </div>
-              <p className="text-[11px] text-white/40">
-                Point this at your LiteLLM proxy to pull the freshest model IDs (Claude Sonnet 4.5, GPT-5, Gemini 2.5, etc.) into the dropdowns below.
-              </p>
             </div>
 
             <div className="space-y-3">
@@ -1190,34 +1183,39 @@ export default function Home() {
 
           <div className="mt-4">
             <p className="text-xs uppercase tracking-wide text-white/50">Moves</p>
-            <ol className="mt-2 space-y-3 text-sm text-white/80">
-              {moveHistory.length === 0 ? (
-                <li className="text-white/40">No moves played yet.</li>
-              ) : (
-                moveHistory.map((entry, index) => {
-                  const moveNumber = Math.floor(index / 2) + 1;
-                  const colorLabel = entry.color === "white" ? "White" : "Black";
-                  return (
-                    <li key={`${entry.notation}-${index}`} className="flex gap-2">
-                      <span className="min-w-[2.5rem] text-xs text-white/40">#{moveNumber}</span>
-                      <div className="flex-1">
-                        <p className="font-medium text-white">
-                          {colorLabel} · {entry.notation}
-                        </p>
-                        {entry.captured && (
-                          <p className="text-[11px] text-white/50">
-                            Captured {PIECE_LABEL[entry.captured.type]}
+            <div
+              ref={moveListRef}
+              className="mt-2 max-h-72 overflow-y-auto rounded-lg bg-white/5 p-3 pr-4"
+            >
+              <ol className="space-y-3 text-sm text-white/80">
+                {moveHistory.length === 0 ? (
+                  <li className="text-white/40">No moves played yet.</li>
+                ) : (
+                  moveHistory.map((entry, index) => {
+                    const moveNumber = Math.floor(index / 2) + 1;
+                    const colorLabel = entry.color === "white" ? "White" : "Black";
+                    return (
+                      <li key={`${entry.notation}-${index}`} className="flex gap-2">
+                        <span className="min-w-[2.5rem] text-xs text-white/40">#{moveNumber}</span>
+                        <div className="flex-1">
+                          <p className="font-medium text-white">
+                            {colorLabel} · {entry.notation}
                           </p>
-                        )}
-                      </div>
-                    </li>
-                  );
-                })
-              )}
-            </ol>
+                          {entry.captured && (
+                            <p className="text-[11px] text-white/50">
+                              Captured {PIECE_LABEL[entry.captured.type]}
+                            </p>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })
+                )}
+              </ol>
+            </div>
           </div>
 
-          <div className="mt-6 space-y-4">
+          <div className="mt-6 space-y-6 border-t border-white/10 pt-4">
             <div>
               <p className="text-xs uppercase tracking-wide text-white/50">Captured by White</p>
               <div className="mt-2 flex flex-wrap gap-2">
