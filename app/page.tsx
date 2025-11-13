@@ -425,6 +425,7 @@ export default function Home() {
   const [liteLlmApiKey, setLiteLlmApiKey] = useState("");
   const [liteLlmStatus, setLiteLlmStatus] = useState<string | null>(null);
   const [isLoadingLiteLlm, setIsLoadingLiteLlm] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const allPresets = useMemo(() => {
     const seen = new Set<string>();
@@ -570,45 +571,46 @@ export default function Home() {
       board: BoardState,
       history: string[],
       config: LlmConfig
-    ) => {
-      try {
-        const payload = {
-          turn,
-          legalMoves,
-          board,
-          history,
-          apiKey: config.apiKey,
-          model: config.model,
-          baseUrl: config.baseUrl,
-        };
+    ): Promise<Move> => {
+      const payload = {
+        turn,
+        legalMoves,
+        board,
+        history,
+        apiKey: config.apiKey,
+        model: config.model,
+        baseUrl: config.baseUrl,
+      };
 
-        const response = await fetch("/api/llm-move", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
+      const response = await fetch("/api/llm-move", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
 
-        if (!response.ok) {
-          throw new Error(`LLM route returned ${response.status}`);
-        }
+      const data: MoveResponse & { error?: string } = await response.json();
 
-        const data: MoveResponse = await response.json();
-        if (data?.move?.from && data.move.to) {
-          const serializedMove = JSON.stringify(data.move);
-          const isLegal = legalMoves.some(
-            (move) => JSON.stringify(move) === serializedMove
-          );
-          if (isLegal) {
-            return data.move;
-          }
-        }
-      } catch (error) {
-        console.warn("Falling back to random move:", error);
+      if (!response.ok) {
+        const errorMessage = data.error || `LLM route returned ${response.status}`;
+        throw new Error(errorMessage);
       }
 
-      return null;
+      if (!data?.move?.from || !data.move.to) {
+        throw new Error(data.error || "LLM did not return a valid move");
+      }
+
+      const serializedMove = JSON.stringify(data.move);
+      const isLegal = legalMoves.some(
+        (move) => JSON.stringify(move) === serializedMove
+      );
+
+      if (!isLegal) {
+        throw new Error("LLM returned an illegal move");
+      }
+
+      return data.move;
     },
     []
   );
@@ -643,15 +645,23 @@ export default function Home() {
       const config = game.turn === "white" ? whiteConfig : blackConfig;
       setStatus(`Consulting ${game.turn} LLM (${config.model})...`);
 
-      const moveFromLlm = await fetchLlmMove(
-        game.turn,
-        legalMoves,
-        game.serializeBoard(),
-        [...game.moves],
-        config
-      );
-
-      const move = moveFromLlm ?? legalMoves[Math.floor(Math.random() * legalMoves.length)];
+      let move: Move;
+      try {
+        move = await fetchLlmMove(
+          game.turn,
+          legalMoves,
+          game.serializeBoard(),
+          [...game.moves],
+          config
+        );
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Failed to get move from LLM";
+        setError(`${game.turn === "white" ? "White" : "Black"} LLM error: ${errorMessage}`);
+        setIsPlaying(false);
+        isPlayingRef.current = false;
+        setStatus(`Game stopped: ${errorMessage}`);
+        return;
+      }
 
       const [fromRow, fromCol] = move.from;
       const [toRow, toCol] = move.to;
@@ -823,6 +833,26 @@ export default function Home() {
 
   const handleStart = () => {
     if (!sceneReadyRef.current || isPlayingRef.current) return;
+
+    // Validate API keys and models
+    const whiteApiKey = whiteConfig.apiKey.trim();
+    const blackApiKey = blackConfig.apiKey.trim();
+    const whiteModel = whiteConfig.model.trim();
+    const blackModel = blackConfig.model.trim();
+
+    if (!whiteApiKey || !whiteModel) {
+      setError("White LLM: API key and model are required");
+      setStatus("Cannot start: White LLM configuration is incomplete");
+      return;
+    }
+
+    if (!blackApiKey || !blackModel) {
+      setError("Black LLM: API key and model are required");
+      setStatus("Cannot start: Black LLM configuration is incomplete");
+      return;
+    }
+
+    setError(null);
     isPlayingRef.current = true;
     setIsPlaying(true);
     playNextTurn();
@@ -841,6 +871,7 @@ export default function Home() {
     isPlayingRef.current = false;
     setIsPlaying(false);
     turnInProgressRef.current = false;
+    setError(null);
 
     if (!sceneReadyRef.current) return;
 
@@ -869,6 +900,8 @@ export default function Home() {
         setBlackPresetId(CUSTOM_PRESET_ID);
       }
     }
+    // Clear error when user updates configuration
+    setError(null);
   };
 
   const handlePresetChange = useCallback(
@@ -1000,6 +1033,11 @@ export default function Home() {
         <div className="flex-1 overflow-y-auto p-6 pr-3">
           <h1 className="text-2xl font-semibold">♟️ LLM Chess Arena ♟️</h1>
           <p className="mt-2 text-teal-300">{status}</p>
+          {error && (
+            <div className="mt-2 rounded-md bg-red-500/20 border border-red-500/50 p-2 text-xs text-red-300">
+              {error}
+            </div>
+          )}
 
           <div className="mt-4 space-y-3">
             <div>
@@ -1008,7 +1046,7 @@ export default function Home() {
                 <button
                   onClick={handleStart}
                   className="rounded-md bg-teal-400 px-3 py-2 font-semibold text-slate-900 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-500"
-                  disabled={isPlaying}
+                  disabled={isPlaying || !whiteConfig.apiKey.trim() || !blackConfig.apiKey.trim() || !whiteConfig.model.trim() || !blackConfig.model.trim()}
                 >
                   Start Battle
                 </button>
