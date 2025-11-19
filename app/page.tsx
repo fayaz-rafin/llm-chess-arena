@@ -3,12 +3,237 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
+// --- Geometry Generators ---
+const GEOMETRY_CACHE: Record<string, THREE.BufferGeometry> = {};
+
+const getLatheGeometry = (points: [number, number][]) => {
+  const key = JSON.stringify(points);
+  if (GEOMETRY_CACHE[key]) return GEOMETRY_CACHE[key];
+
+  const vectorPoints = points.map(([r, y]) => new THREE.Vector2(r, y));
+  const geometry = new THREE.LatheGeometry(vectorPoints, 32);
+  geometry.computeVertexNormals();
+  GEOMETRY_CACHE[key] = geometry;
+  return geometry;
+};
+
+// Standard base profile for all pieces
+const BASE_PROFILE: [number, number][] = [
+  [0.35, 0],
+  [0.35, 0.05],
+  [0.32, 0.08],
+  [0.30, 0.12],
+  [0.28, 0.15],
+];
+
+// Helper to merge base with piece profile
+const withBase = (profile: [number, number][], startY: number) => {
+  const adjustedProfile = profile.map(([r, y]) => [r, y + startY] as [number, number]);
+  return [...BASE_PROFILE, ...adjustedProfile];
+};
+
+const getPawnGeometry = () =>
+  getLatheGeometry(
+    withBase(
+      [
+        [0.20, 0], // Stem bottom
+        [0.15, 0.3], // Stem mid
+        [0.12, 0.45], // Neck
+        [0.18, 0.46], // Collar bottom
+        [0.18, 0.49], // Collar top
+        [0.10, 0.50], // Neck top
+        [0.22, 0.65], // Head equator
+        [0, 0.80],    // Head top
+      ],
+      0.15
+    )
+  );
+
+const getRookGeometry = () =>
+  getLatheGeometry([
+    // Base (Tiered rings)
+    [0.32, 0],
+    [0.32, 0.05],
+    [0.28, 0.08], // Step in
+    [0.30, 0.12], // Ring 1 out
+    [0.30, 0.15], // Ring 1 vert
+    [0.26, 0.18], // Ring 1 in
+    [0.28, 0.21], // Ring 2 out
+    [0.28, 0.23], // Ring 2 vert
+    [0.20, 0.25], // Ring 2 in / Stem start
+    
+    // Stem (Tapered cylinder)
+    [0.17, 0.50], // Middle neck
+    [0.18, 0.60], // Top of stem
+    
+    // Neck Ring (The collar below the turret)
+    [0.24, 0.63], // Ring out
+    [0.24, 0.66], // Ring vert
+    [0.19, 0.69], // Ring in
+
+    // Turret Base (Flare)
+    [0.28, 0.82], // Flare out
+    [0.28, 0.90], // Turret solid wall
+    [0.20, 0.90], // Inner rim floor
+    [0.20, 0.85], // Inside cup depth
+    [0, 0.85],    // Center floor
+  ]);
+
+const getBishopGeometry = () =>
+  getLatheGeometry(
+    withBase(
+      [
+        [0.22, 0],
+        [0.15, 0.4], // Stem
+        [0.12, 0.55], // Neck
+        [0.22, 0.6], // Head base
+        [0.20, 0.8], // Head mid
+        [0.05, 0.92], // Tip base
+        [0.08, 0.95], // Finial
+        [0, 0.98],    // Top
+      ],
+      0.15
+    )
+  );
+
+const getQueenGeometry = () =>
+  getLatheGeometry(
+    withBase(
+      [
+        [0.24, 0],
+        [0.16, 0.4], // Stem
+        [0.14, 0.7], // Neck
+        [0.26, 0.85], // Crown flare
+        [0.28, 0.9], // Crown rim
+        [0.15, 0.9], // Hollow
+        [0.15, 0.85], // Inner
+        [0, 0.85],
+      ],
+      0.15
+    )
+  );
+
+const getKingGeometry = () =>
+  getLatheGeometry(
+    withBase(
+      [
+        [0.24, 0],
+        [0.16, 0.4], // Stem
+        [0.14, 0.7], // Neck
+        [0.24, 0.85], // Crown flare
+        [0.24, 0.92], // Crown rim
+        [0, 0.92],    // Top flat
+      ],
+      0.15
+    )
+  );
+
+const getKnightHeadGeometry = () => {
+  if (GEOMETRY_CACHE["knight-head"]) return GEOMETRY_CACHE["knight-head"];
+
+  const shape = new THREE.Shape();
+  
+  // Stylized Knight profile based on reference (segmented mane, vents, blocky snout)
+  
+  // Start at bottom back
+  shape.moveTo(-0.2, -0.1);
+  
+  // Mane (Back of neck) with "teeth" segments
+  const teethCount = 8;
+  let tx = -0.22;
+  let ty = -0.05;
+  
+  // Curve up and forward
+  for (let i = 0; i < teethCount; i++) {
+    const progress = i / teethCount;
+    // Curve the spine forward as we go up
+    const nextTx = -0.2 + Math.sin(progress * 1.2) * 0.15; 
+    const nextTy = ty + 0.12;
+    
+    // Tooth outward (back/up)
+    shape.lineTo(tx - 0.08, ty + 0.04);
+    // Tooth inward (next base)
+    shape.lineTo(nextTx, nextTy);
+    
+    tx = nextTx;
+    ty = nextTy;
+  }
+  
+  // Top of head / Crest
+  shape.lineTo(0.1, 0.95); 
+  
+  // Forehead slope down
+  shape.lineTo(0.25, 0.85);
+  
+  // Eye/Brow ridge area
+  shape.lineTo(0.3, 0.82);
+  shape.lineTo(0.35, 0.7);
+  
+  // Snout bridge
+  shape.lineTo(0.48, 0.55);
+  
+  // Snout nose tip (flat vertical)
+  shape.lineTo(0.45, 0.45);
+  
+  // Mouth/Jaw undercut
+  shape.lineTo(0.35, 0.4);
+  
+  // Cheek/Jaw curve
+  shape.lineTo(0.25, 0.35);
+  
+  // Neck front curve
+  shape.bezierCurveTo(0.28, 0.25, 0.32, 0.1, 0.2, -0.1);
+  
+  // Close at base
+  shape.lineTo(-0.2, -0.1);
+
+  // 3 Vents (Diagonal Slots) - modeled as holes
+  const createVent = (x: number, y: number) => {
+    const hole = new THREE.Path();
+    const w = 0.12;
+    const h = 0.03;
+    const slant = 0.08;
+    
+    // Draw a slanted rectangle
+    hole.moveTo(x, y);
+    hole.lineTo(x + w, y + slant);
+    hole.lineTo(x + w, y + slant + h);
+    hole.lineTo(x, y + h);
+    hole.lineTo(x, y);
+    shape.holes.push(hole);
+  };
+  
+  // Position vents along the neck
+  createVent(-0.05, 0.15);
+  createVent(0.0, 0.30);
+  createVent(0.05, 0.45);
+
+  const extrudeSettings = {
+    steps: 1,
+    depth: 0.18, // Thickness
+    bevelEnabled: true,
+    bevelThickness: 0.02,
+    bevelSize: 0.01,
+    bevelSegments: 3,
+  };
+
+  const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+  geometry.center();
+  GEOMETRY_CACHE["knight-head"] = geometry;
+  return geometry;
+};
+
+// Base geometry for Knight (since it uses extrude head on lathe base)
+const getKnightBaseGeometry = () =>
+  getLatheGeometry(BASE_PROFILE);
+
 type PieceType = "pawn" | "rook" | "knight" | "bishop" | "queen" | "king";
 type PieceColor = "white" | "black";
 type Piece = {
   type: PieceType;
   color: PieceColor;
 };
+
 type BoardState = (Piece | null)[][];
 type Move = {
   from: [number, number];
@@ -372,6 +597,18 @@ const MODEL_PRESETS: ReadonlyArray<ModelPreset> = [
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
   },
   {
+    id: "google-gemini-3-flash",
+    label: "Google · Gemini 3 Flash",
+    model: "gemini-3-flash",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+  },
+  {
+    id: "google-gemini-3-pro",
+    label: "Google · Gemini 3 Pro",
+    model: "gemini-3-pro",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+  },
+  {
     id: CUSTOM_PRESET_ID,
     label: "Custom configuration…",
     model: "",
@@ -392,7 +629,7 @@ export default function Home() {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-  const piecesRef = useRef<Record<string, THREE.Mesh>>({});
+  const piecesRef = useRef<Record<string, THREE.Object3D>>({});
   const angleRef = useRef(0);
   const requestRef = useRef<number | null>(null);
   const gameRef = useRef<ChessGame | null>(null);
@@ -474,38 +711,188 @@ export default function Home() {
   }, []);
 
   const createPieceMesh = useCallback((type: PieceType, color: PieceColor) => {
-    let geometry: THREE.BufferGeometry;
-
-    switch (type) {
-      case "pawn":
-        geometry = new THREE.CylinderGeometry(0.2, 0.3, 0.6, 12);
-        break;
-      case "rook":
-        geometry = new THREE.BoxGeometry(0.5, 0.8, 0.5);
-        break;
-      case "knight":
-        geometry = new THREE.ConeGeometry(0.3, 0.8, 5);
-        break;
-      case "bishop":
-        geometry = new THREE.ConeGeometry(0.25, 1, 12);
-        break;
-      case "queen":
-        geometry = new THREE.SphereGeometry(0.35, 16, 16);
-        break;
-      case "king":
-      default:
-        geometry = new THREE.CylinderGeometry(0.25, 0.35, 1, 12);
-        break;
-    }
-
     const material = new THREE.MeshStandardMaterial({
-      color: color === "white" ? 0xffffff : 0x333333,
-      roughness: 0.4,
-      metalness: 0.3,
+      color: color === "white" ? 0xffffff : 0x222222,
+      roughness: 0.5,
+      metalness: 0.4,
     });
 
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true;
+    let mesh: THREE.Object3D;
+
+    if (type === "knight") {
+      const group = new THREE.Group();
+
+      const baseGeo = getKnightBaseGeometry();
+      const base = new THREE.Mesh(baseGeo, material);
+      base.castShadow = true;
+      base.receiveShadow = true;
+      group.add(base);
+
+      const headGeo = getKnightHeadGeometry();
+      const head = new THREE.Mesh(headGeo, material);
+      // Center of extruded geometry is at (0,0,0).
+      // Approximate height of head is 0.9. Base is 0.15 height.
+      // Shift head up.
+      head.position.y = 0.55;
+      
+      // Rotate to face forward
+      // Extrude is in XY plane. Thickness along Z.
+      // White (row 7, +Z) faces -Z (toward 0). 
+      // Black (row 0, -Z) faces +Z (toward 7).
+      // If shape faces +X (right) in XY plane:
+      // Rotate Y +90 deg -> Faces -Z?
+      //   X becomes -Z.
+      //   Y stays Y.
+      //   Z becomes X.
+      // So if shape points +X, rotating +90 Y makes it point -Z (White's direction).
+      // Rotating -90 Y makes it point +Z (Black's direction).
+      head.rotation.y = color === "white" ? Math.PI / 2 : -Math.PI / 2;
+      
+      head.castShadow = true;
+      head.receiveShadow = true;
+      group.add(head);
+
+      mesh = group;
+    } else if (type === "rook") {
+      const group = new THREE.Group();
+      const bodyGeo = getRookGeometry();
+      const body = new THREE.Mesh(bodyGeo, material);
+      body.castShadow = true;
+      body.receiveShadow = true;
+      group.add(body);
+
+      // Add crenellations using cylinder segments
+      const crenellationCount = 6;
+      const outerRadius = 0.28;
+      const innerRadius = 0.20;
+      const height = 0.12;
+      const startY = 0.90;
+      
+      // Arc length for each merlon (tooth)
+      // Total circle is 2*PI. We have 6 teeth and 6 gaps.
+      // Let's say teeth covers 60% of space.
+      const totalAngle = Math.PI * 2;
+      const segmentAngle = totalAngle / crenellationCount;
+      const toothAngle = segmentAngle * 0.6;
+      
+      const crenGeo = new THREE.CylinderGeometry(outerRadius, outerRadius, height, 16, 1, true, 0, toothAngle);
+      
+      // We need a thick wall, not just a thin shell. 
+      // CylinderGeometry is a shell if openEnded is false, but it has top/bottom caps.
+      // It doesn't have thickness.
+      // We can construct a shape and extrude it, or simpler: 
+      // Use RingGeometry extruded? No.
+      // Use a custom shape for the "C" profile (pie slice) and extrude it up.
+      
+      const shape = new THREE.Shape();
+      shape.absarc(0, 0, outerRadius, 0, toothAngle, false);
+      shape.lineTo(Math.cos(toothAngle) * innerRadius, Math.sin(toothAngle) * innerRadius);
+      shape.absarc(0, 0, innerRadius, toothAngle, 0, true);
+      shape.lineTo(outerRadius, 0);
+      
+      const extrudeSettings = {
+        depth: height,
+        bevelEnabled: false,
+        curveSegments: 4
+      };
+      
+      const toothGeometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+      // Extrude goes along Z axis by default. We want Y.
+      // Rotate X -90 deg.
+      toothGeometry.rotateX(-Math.PI / 2);
+      // Correct position: Extrude starts at Z=0 and goes to Z=depth.
+      // After rotation X -90: starts Y=0 goes Y=depth.
+      
+      for (let i = 0; i < crenellationCount; i++) {
+        const angle = i * segmentAngle;
+        const tooth = new THREE.Mesh(toothGeometry, material);
+        
+        // We need to rotate each tooth around the center Y axis
+        tooth.rotation.y = angle;
+        tooth.position.y = startY;
+        
+        tooth.castShadow = true;
+        tooth.receiveShadow = true;
+        group.add(tooth);
+      }
+      mesh = group;
+    } else if (type === "queen") {
+      const group = new THREE.Group();
+      const bodyGeo = getQueenGeometry();
+      const body = new THREE.Mesh(bodyGeo, material);
+      body.castShadow = true;
+      body.receiveShadow = true;
+      group.add(body);
+
+      // Add crown points (coronet)
+      const pointCount = 8;
+      const radius = 0.22;
+      const height = 0.88;
+      
+      for (let i = 0; i < pointCount; i++) {
+        const angle = (i / pointCount) * Math.PI * 2;
+        const coneGeo = new THREE.ConeGeometry(0.04, 0.12, 8); // Small spikes
+        const spike = new THREE.Mesh(coneGeo, material);
+        spike.position.set(
+          Math.cos(angle) * radius,
+          height,
+          Math.sin(angle) * radius
+        );
+        // Tilt outward slightly
+        spike.rotation.x = 0.2; // Local rotation requires pivot or group helper, simpler to just place vertical for now
+        // Actually if we want them to flare out, we need to rotate them based on angle.
+        // Let's keep them vertical for simplicity or compute rotation.
+        // spike.lookAt(0, height + 1, 0) -> looks up and in?
+        spike.castShadow = true;
+        spike.receiveShadow = true;
+        group.add(spike);
+      }
+
+      // Central ball
+      const ballGeo = new THREE.SphereGeometry(0.08, 12, 12);
+      const ball = new THREE.Mesh(ballGeo, material);
+      ball.position.y = 0.88;
+      ball.castShadow = true;
+      ball.receiveShadow = true;
+      group.add(ball);
+
+      mesh = group;
+    } else if (type === "king") {
+      const group = new THREE.Group();
+      
+      const bodyGeo = getKingGeometry();
+      const body = new THREE.Mesh(bodyGeo, material);
+      body.castShadow = true;
+      body.receiveShadow = true;
+      group.add(body);
+
+      const crossGeo = new THREE.BoxGeometry(0.06, 0.2, 0.06);
+      const crossBarGeo = new THREE.BoxGeometry(0.15, 0.06, 0.06);
+      
+      const crossV = new THREE.Mesh(crossGeo, material);
+      crossV.position.y = 1.05;
+      crossV.castShadow = true;
+      group.add(crossV);
+      
+      const crossH = new THREE.Mesh(crossBarGeo, material);
+      crossH.position.y = 1.05;
+      crossH.castShadow = true;
+      group.add(crossH);
+
+      mesh = group;
+    } else {
+      let geometry: THREE.BufferGeometry;
+      switch (type) {
+        case "pawn": geometry = getPawnGeometry(); break;
+        case "bishop": geometry = getBishopGeometry(); break;
+        default: geometry = getPawnGeometry(); break;
+      }
+      const m = new THREE.Mesh(geometry, material);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      mesh = m;
+    }
+
     return mesh;
   }, []);
 
@@ -523,7 +910,7 @@ export default function Home() {
           const piece = createPieceMesh(square.type, square.color);
           piece.position.set(
             col * SQUARE_SIZE - BOARD_OFFSET,
-            0.5,
+            0, // Sit directly on board
             row * SQUARE_SIZE - BOARD_OFFSET
           );
           piece.userData = { row, col, type: square.type, color: square.color };
@@ -552,7 +939,7 @@ export default function Home() {
       if (piece) {
         piece.position.set(
           toCol * SQUARE_SIZE - BOARD_OFFSET,
-          0.5,
+          0, // Sit directly on board
           toRow * SQUARE_SIZE - BOARD_OFFSET
         );
         piece.userData.row = toRow;
@@ -1025,12 +1412,25 @@ export default function Home() {
         color: "#ffffff",
       }}
     >
+      <style>
+        {`
+          /* Hide scrollbar for Chrome, Safari and Opera */
+          .no-scrollbar::-webkit-scrollbar {
+            display: none;
+          }
+          /* Hide scrollbar for IE, Edge and Firefox */
+          .no-scrollbar {
+            -ms-overflow-style: none;  /* IE and Edge */
+            scrollbar-width: none;  /* Firefox */
+          }
+        `}
+      </style>
       <div ref={containerRef} className="h-full w-full" />
 
       <div
         className="pointer-events-auto absolute left-6 top-6 flex max-h-[calc(100vh-3rem)] w-[min(24rem,90vw)] flex-col overflow-hidden rounded-xl border border-white/10 bg-black/60 text-sm shadow-2xl backdrop-blur-lg"
       >
-        <div className="flex-1 overflow-y-auto p-6 pr-3">
+        <div className="flex-1 overflow-y-auto p-6 pr-3 no-scrollbar">
           <h1 className="text-2xl font-semibold">♟️ LLM Chess Arena ♟️</h1>
           <p className="mt-2 text-teal-300">{status}</p>
           {error && (
@@ -1188,21 +1588,6 @@ export default function Home() {
                   : "Preset locks the model and base URL. Choose Custom to edit manually."}
               </p>
             </div>
-          </div>
-
-          <div className="mt-5 max-h-60 overflow-y-auto rounded-lg bg-white/5 p-3 text-xs text-white/80">
-            {moveLog.length === 0 ? (
-              <p className="text-white/40">No moves yet. Start the battle to see the action.</p>
-            ) : (
-              moveLog.map((move, index) => (
-                <div
-                  key={`${move}-${index}`}
-                  className="border-l-2 border-teal-400/80 pl-2"
-                >
-                  {move}
-                </div>
-              ))
-            )}
           </div>
 
           <p className="mt-4 text-[11px] text-white/40">

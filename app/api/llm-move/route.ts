@@ -453,7 +453,7 @@ Playing as ${turn}. Return ONLY: {"from":[r,c],"to":[r,c]}`;
         const thoughtsTokens = usage?.thoughtsTokenCount || 0;
         return NextResponse.json(
           { 
-            error: `Gemini 2.5 Flash hit the token limit. The model used ${thoughtsTokens} "thinking tokens" (internal reasoning) which count toward the output limit. This is a built-in feature of Gemini 2.5 Flash that cannot be disabled. Recommendation: Use a different model like GPT-4o, Claude, or Gemini 2.0 Flash (if available) for more reliable chess moves.`,
+            error: `${model} hit the token limit. The model used ${thoughtsTokens} "thinking tokens" (internal reasoning) which count toward the output limit. This is a built-in feature of some Gemini models that cannot be disabled. Recommendation: Use a different model like GPT-4o, Claude, or a standard Gemini model (if available) for more reliable chess moves.`,
             debug: `Finish reason: ${finishReason}, Thinking tokens: ${thoughtsTokens}, Total tokens: ${usage?.totalTokenCount || 'unknown'}, Max output tokens: 8192`
           },
           { status: 422 }
