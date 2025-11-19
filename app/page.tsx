@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
+let persistedCameraAngle = 0;
+
 // --- Geometry Generators ---
 const GEOMETRY_CACHE: Record<string, THREE.BufferGeometry> = {};
 
@@ -630,7 +632,7 @@ export default function Home() {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const piecesRef = useRef<Record<string, THREE.Object3D>>({});
-  const angleRef = useRef(0);
+  const angleRef = useRef(persistedCameraAngle);
   const requestRef = useRef<number | null>(null);
   const gameRef = useRef<ChessGame | null>(null);
   const isPlayingRef = useRef(false);
@@ -663,6 +665,55 @@ export default function Home() {
   const [liteLlmStatus, setLiteLlmStatus] = useState<string | null>(null);
   const [isLoadingLiteLlm, setIsLoadingLiteLlm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isControlsOpen, setIsControlsOpen] = useState(false);
+  const [isLogOpen, setIsLogOpen] = useState(false);
+  const isDrawerOpen = isControlsOpen || isLogOpen;
+
+  const closeDrawers = useCallback(() => {
+    setIsControlsOpen(false);
+    setIsLogOpen(false);
+  }, []);
+
+  const openControlsPanel = useCallback(() => {
+    setIsControlsOpen(true);
+    setIsLogOpen(false);
+  }, []);
+
+  const openLogPanel = useCallback(() => {
+    setIsLogOpen(true);
+    setIsControlsOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.body.style.overflow = isDrawerOpen ? "hidden" : "";
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [isDrawerOpen]);
+
+  useEffect(() => {
+    if (!isDrawerOpen) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeDrawers();
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [closeDrawers, isDrawerOpen]);
+
+  const handleKeyToggle = (
+    event: { key: string; preventDefault: () => void },
+    action: () => void
+  ) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      action();
+    }
+  };
 
   const allPresets = useMemo(() => {
     const seen = new Set<string>();
@@ -1171,6 +1222,7 @@ export default function Home() {
     sceneReadyRef.current = true;
 
     return () => {
+      persistedCameraAngle = angleRef.current;
       isPlayingRef.current = false;
       turnInProgressRef.current = false;
       if (scheduleNextTurn.current) {
@@ -1404,6 +1456,253 @@ export default function Home() {
     });
   }, [allPresets]);
 
+  const ControlPanelContent = () => (
+    <>
+      <h1 className="text-2xl font-semibold">♟️ LLM Chess Arena ♟️</h1>
+      <p className="mt-2 text-teal-300">{status}</p>
+      {error && (
+        <div className="mt-2 rounded-md border border-red-500/50 bg-red-500/20 p-2 text-xs text-red-300">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-4 space-y-3">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-white/50">Battle Controls</p>
+          <div className="mt-2 flex flex-wrap gap-2 text-sm">
+            <button
+              onClick={handleStart}
+              className="rounded-md bg-teal-400 px-3 py-2 font-semibold text-slate-900 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-500"
+              disabled={
+                isPlaying ||
+                !whiteConfig.apiKey.trim() ||
+                !blackConfig.apiKey.trim() ||
+                !whiteConfig.model.trim() ||
+                !blackConfig.model.trim()
+              }
+            >
+              Start Battle
+            </button>
+            <button
+              onClick={handlePause}
+              className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20"
+              disabled={!isPlaying}
+            >
+              Pause
+            </button>
+            <button
+              onClick={handleReset}
+              className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
+            Turn Delay (ms)
+            <input
+              type="number"
+              min={250}
+              step={250}
+              value={moveDelay}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                if (Number.isNaN(value)) {
+                  setMoveDelay(MOVE_DELAY_MS);
+                  return;
+                }
+                setMoveDelay(Math.max(250, value));
+              }}
+              className="ml-2 w-20 rounded bg-white/10 px-2 py-1 text-right text-white placeholder-white/40 focus:outline-none"
+            />
+          </label>
+        </div>
+
+        <div className="space-y-3">
+          <p className="text-xs uppercase tracking-wide text-white/50">White LLM</p>
+          <select
+            value={whitePresetId}
+            onChange={(event) => handlePresetChange("white", event.target.value)}
+            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white focus:outline-none"
+          >
+            {allPresets.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+          <input
+            type="password"
+            placeholder="API key"
+            value={whiteConfig.apiKey}
+            onChange={(event) => handleConfigChange("white", "apiKey", event.target.value)}
+            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none"
+          />
+          <input
+            type="text"
+            placeholder="Model ID"
+            value={whiteConfig.model}
+            onChange={(event) => handleConfigChange("white", "model", event.target.value)}
+            disabled={!whiteIsCustom}
+            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          />
+          <input
+            type="text"
+            placeholder="Base URL"
+            value={whiteConfig.baseUrl}
+            onChange={(event) => handleConfigChange("white", "baseUrl", event.target.value)}
+            disabled={!whiteIsCustom}
+            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          />
+          <p className="text-[11px] text-white/40">
+            {whiteIsCustom
+              ? "Set a custom model ID and base URL for this side."
+              : "Preset locks the model and base URL. Choose Custom to edit manually."}
+          </p>
+        </div>
+
+        <div className="space-y-3">
+          <p className="text-xs uppercase tracking-wide text-white/50">Black LLM</p>
+          <select
+            value={blackPresetId}
+            onChange={(event) => handlePresetChange("black", event.target.value)}
+            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white focus:outline-none"
+          >
+            {allPresets.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+          <input
+            type="password"
+            placeholder="API key"
+            value={blackConfig.apiKey}
+            onChange={(event) => handleConfigChange("black", "apiKey", event.target.value)}
+            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none"
+          />
+          <input
+            type="text"
+            placeholder="Model ID"
+            value={blackConfig.model}
+            onChange={(event) => handleConfigChange("black", "model", event.target.value)}
+            disabled={!blackIsCustom}
+            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          />
+          <input
+            type="text"
+            placeholder="Base URL"
+            value={blackConfig.baseUrl}
+            onChange={(event) => handleConfigChange("black", "baseUrl", event.target.value)}
+            disabled={!blackIsCustom}
+            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          />
+          <p className="text-[11px] text-white/40">
+            {blackIsCustom
+              ? "Set a custom model ID and base URL for this side."
+              : "Preset locks the model and base URL. Choose Custom to edit manually."}
+          </p>
+        </div>
+      </div>
+
+      <p className="mt-4 text-[11px] text-white/40">
+        Provide API keys for two different LLMs (or the same model twice) to let
+        them duel automatically. Keys are stored only in your browser and sent
+        directly to the move-selection API route for each turn.
+      </p>
+    </>
+  );
+
+  const BattleLogContent = () => (
+    <>
+      <h2 className="text-xl font-semibold">Battle Log</h2>
+
+      <div className="mt-4">
+        <p className="text-xs uppercase tracking-wide text-white/50">Moves</p>
+        <div
+          ref={moveListRef}
+          className="mt-2 max-h-72 overflow-y-auto rounded-lg bg-white/5 p-3 pr-4"
+        >
+          <ol className="space-y-3 text-sm text-white/80">
+            {moveHistory.length === 0 ? (
+              <li className="text-white/40">No moves played yet.</li>
+            ) : (
+              moveHistory.map((entry, index) => {
+                const moveNumber = Math.floor(index / 2) + 1;
+                const colorLabel = entry.color === "white" ? "White" : "Black";
+                return (
+                  <li key={`${entry.notation}-${index}`} className="flex gap-2">
+                    <span className="min-w-[2.5rem] text-xs text-white/40">#{moveNumber}</span>
+                    <div className="flex-1">
+                      <p className="font-medium text-white">
+                        {colorLabel} · {entry.notation}
+                      </p>
+                      {entry.captured && (
+                        <p className="text-[11px] text-white/50">
+                          Captured {PIECE_LABEL[entry.captured.type]}
+                        </p>
+                      )}
+                    </div>
+                  </li>
+                );
+              })
+            )}
+          </ol>
+        </div>
+      </div>
+
+      <div className="mt-6 space-y-6 border-t border-white/10 pt-4">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-white/50">Captured by White</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {capturedByWhite.length === 0 ? (
+              <span className="text-[11px] text-white/40">None yet.</span>
+            ) : (
+              capturedByWhite.map((piece, index) => (
+                <div
+                  key={`white-captured-${piece.type}-${index}`}
+                  className="flex items-center gap-1 rounded bg-white/10 px-2 py-1"
+                >
+                  <img
+                    src={PIECE_IMAGE_MAP[piece.color][piece.type]}
+                    alt={`${piece.color} ${piece.type}`}
+                    className="h-6 w-6 object-contain"
+                  />
+                  <span className="text-[11px] text-white/70">{PIECE_LABEL[piece.type]}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-xs uppercase tracking-wide text-white/50">Captured by Black</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {capturedByBlack.length === 0 ? (
+              <span className="text-[11px] text-white/40">None yet.</span>
+            ) : (
+              capturedByBlack.map((piece, index) => (
+                <div
+                  key={`black-captured-${piece.type}-${index}`}
+                  className="flex items-center gap-1 rounded bg-white/10 px-2 py-1"
+                >
+                  <img
+                    src={PIECE_IMAGE_MAP[piece.color][piece.type]}
+                    alt={`${piece.color} ${piece.type}`}
+                    className="h-6 w-6 object-contain"
+                  />
+                  <span className="text-[11px] text-white/70">{PIECE_LABEL[piece.type]}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+
   return (
     <div
       className="relative flex h-screen w-screen flex-col overflow-hidden"
@@ -1412,273 +1711,113 @@ export default function Home() {
         color: "#ffffff",
       }}
     >
+      <div ref={containerRef} className="h-full w-full" />
+
       <style>
         {`
-          /* Hide scrollbar for Chrome, Safari and Opera */
           .no-scrollbar::-webkit-scrollbar {
             display: none;
           }
-          /* Hide scrollbar for IE, Edge and Firefox */
           .no-scrollbar {
-            -ms-overflow-style: none;  /* IE and Edge */
-            scrollbar-width: none;  /* Firefox */
+            -ms-overflow-style: none;
+            scrollbar-width: none;
           }
         `}
       </style>
-      <div ref={containerRef} className="h-full w-full" />
+
+      <div className="pointer-events-none absolute top-4 left-1/2 z-20 w-[90vw] max-w-sm -translate-x-1/2 rounded-full border border-white/10 bg-black/60 px-4 py-2 text-center text-xs text-white md:hidden">
+        {status}
+      </div>
+
+      {isDrawerOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+          onClick={closeDrawers}
+          role="button"
+          tabIndex={0}
+          aria-label="Close panels"
+          onKeyDown={(event) => handleKeyToggle(event, closeDrawers)}
+        />
+      )}
 
       <div
-        className="pointer-events-auto absolute left-6 top-6 flex max-h-[calc(100vh-3rem)] w-[min(24rem,90vw)] flex-col overflow-hidden rounded-xl border border-white/10 bg-black/60 text-sm shadow-2xl backdrop-blur-lg"
+        className={`md:hidden fixed inset-x-0 bottom-0 z-50 transform transition-transform duration-300 ${
+          isControlsOpen ? "translate-y-0" : "translate-y-full"
+        }`}
+        aria-hidden={!isControlsOpen}
       >
-        <div className="flex-1 overflow-y-auto p-6 pr-3 no-scrollbar">
-          <h1 className="text-2xl font-semibold">♟️ LLM Chess Arena ♟️</h1>
-          <p className="mt-2 text-teal-300">{status}</p>
-          {error && (
-            <div className="mt-2 rounded-md bg-red-500/20 border border-red-500/50 p-2 text-xs text-red-300">
-              {error}
-            </div>
-          )}
-
-          <div className="mt-4 space-y-3">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-white/50">Battle Controls</p>
-              <div className="mt-2 flex flex-wrap gap-2 text-sm">
-                <button
-                  onClick={handleStart}
-                  className="rounded-md bg-teal-400 px-3 py-2 font-semibold text-slate-900 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-500"
-                  disabled={isPlaying || !whiteConfig.apiKey.trim() || !blackConfig.apiKey.trim() || !whiteConfig.model.trim() || !blackConfig.model.trim()}
-                >
-                  Start Battle
-                </button>
-                <button
-                  onClick={handlePause}
-                  className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20"
-                  disabled={!isPlaying}
-                >
-                  Pause
-                </button>
-                <button
-                  onClick={handleReset}
-                  className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20"
-                >
-                  Reset
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <label className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
-                Turn Delay (ms)
-                <input
-                  type="number"
-                  min={250}
-                  step={250}
-                  value={moveDelay}
-                  onChange={(event) => {
-                    const value = Number(event.target.value);
-                    if (Number.isNaN(value)) {
-                      setMoveDelay(MOVE_DELAY_MS);
-                      return;
-                    }
-                    setMoveDelay(Math.max(250, value));
-                  }}
-                  className="ml-2 w-20 rounded bg-white/10 px-2 py-1 text-right text-white placeholder-white/40 focus:outline-none"
-                />
-              </label>
-            </div>
-
-            <div className="space-y-3">
-              <p className="text-xs uppercase tracking-wide text-white/50">White LLM</p>
-              <select
-                value={whitePresetId}
-                onChange={(event) =>
-                  handlePresetChange("white", event.target.value)
-                }
-                className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white focus:outline-none"
-              >
-                {allPresets.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="password"
-                placeholder="API key"
-                value={whiteConfig.apiKey}
-                onChange={(event) =>
-                  handleConfigChange("white", "apiKey", event.target.value)
-                }
-                className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none"
-              />
-              <input
-                type="text"
-                placeholder="Model ID"
-                value={whiteConfig.model}
-                onChange={(event) =>
-                  handleConfigChange("white", "model", event.target.value)
-                }
-                disabled={!whiteIsCustom}
-                className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-              />
-              <input
-                type="text"
-                placeholder="Base URL"
-                value={whiteConfig.baseUrl}
-                onChange={(event) =>
-                  handleConfigChange("white", "baseUrl", event.target.value)
-                }
-                disabled={!whiteIsCustom}
-                className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-              />
-              <p className="text-[11px] text-white/40">
-                {whiteIsCustom
-                  ? "Set a custom model ID and base URL for this side."
-                  : "Preset locks the model and base URL. Choose Custom to edit manually."}
-              </p>
-            </div>
-
-            <div className="space-y-3">
-              <p className="text-xs uppercase tracking-wide text-white/50">Black LLM</p>
-              <select
-                value={blackPresetId}
-                onChange={(event) =>
-                  handlePresetChange("black", event.target.value)
-                }
-                className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white focus:outline-none"
-              >
-                {allPresets.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="password"
-                placeholder="API key"
-                value={blackConfig.apiKey}
-                onChange={(event) =>
-                  handleConfigChange("black", "apiKey", event.target.value)
-                }
-                className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none"
-              />
-              <input
-                type="text"
-                placeholder="Model ID"
-                value={blackConfig.model}
-                onChange={(event) =>
-                  handleConfigChange("black", "model", event.target.value)
-                }
-                disabled={!blackIsCustom}
-                className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-              />
-              <input
-                type="text"
-                placeholder="Base URL"
-                value={blackConfig.baseUrl}
-                onChange={(event) =>
-                  handleConfigChange("black", "baseUrl", event.target.value)
-                }
-                disabled={!blackIsCustom}
-                className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-              />
-              <p className="text-[11px] text-white/40">
-                {blackIsCustom
-                  ? "Set a custom model ID and base URL for this side."
-                  : "Preset locks the model and base URL. Choose Custom to edit manually."}
-              </p>
-            </div>
+        <div className="rounded-t-3xl border border-white/10 bg-black/80 p-5 shadow-2xl backdrop-blur-2xl">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-white/80">LLM Controls</p>
+            <button
+              onClick={closeDrawers}
+              className="rounded-full bg-white/10 px-3 py-1 text-xs text-white hover:bg-white/20"
+            >
+              Close
+            </button>
           </div>
-
-          <p className="mt-4 text-[11px] text-white/40">
-            Provide API keys for two different LLMs (or the same model twice) to let
-            them duel automatically. Keys are stored only in your browser and sent
-            directly to the move-selection API route for each turn.
-          </p>
+          <div className="mt-4 max-h-[70vh] overflow-y-auto pr-2 no-scrollbar">
+            <ControlPanelContent />
+          </div>
         </div>
       </div>
 
       <div
-        className="pointer-events-auto absolute right-6 top-6 flex max-h-[calc(100vh-3rem)] w-[min(24rem,90vw)] flex-col overflow-hidden rounded-xl border border-white/10 bg-black/60 text-sm shadow-2xl backdrop-blur-lg"
+        className={`md:hidden fixed inset-x-0 bottom-0 z-50 transform transition-transform duration-300 ${
+          isLogOpen ? "translate-y-0" : "translate-y-full"
+        }`}
+        aria-hidden={!isLogOpen}
+      >
+        <div className="rounded-t-3xl border border-white/10 bg-black/80 p-5 shadow-2xl backdrop-blur-2xl">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-white/80">Battle Log</p>
+            <button
+              onClick={closeDrawers}
+              className="rounded-full bg-white/10 px-3 py-1 text-xs text-white hover:bg-white/20"
+            >
+              Close
+            </button>
+          </div>
+          <div className="mt-4 max-h-[70vh] overflow-y-auto pr-2 no-scrollbar">
+            <BattleLogContent />
+          </div>
+        </div>
+      </div>
+
+      <div className="md:hidden fixed inset-x-0 bottom-5 z-30 flex items-center justify-between px-6">
+        <button
+          onClick={openControlsPanel}
+          className="flex items-center gap-2 rounded-full bg-white/15 px-5 py-3 text-sm font-semibold text-white shadow-xl backdrop-blur"
+          aria-label="Open controls"
+          tabIndex={0}
+          onKeyDown={(event) => handleKeyToggle(event, openControlsPanel)}
+        >
+          ⚙️ Controls
+        </button>
+        <button
+          onClick={openLogPanel}
+          className="flex items-center gap-2 rounded-full bg-teal-400/90 px-5 py-3 text-sm font-semibold text-slate-900 shadow-xl backdrop-blur"
+          aria-label="Open battle log"
+          tabIndex={0}
+          onKeyDown={(event) => handleKeyToggle(event, openLogPanel)}
+        >
+          📜 Log
+        </button>
+      </div>
+
+      <div
+        className="pointer-events-auto absolute left-6 top-6 hidden max-h-[calc(100vh-3rem)] w-[min(24rem,90vw)] flex-col overflow-hidden rounded-xl border border-white/10 bg-black/60 text-sm shadow-2xl backdrop-blur-lg md:flex"
+      >
+        <div className="flex-1 overflow-y-auto p-6 pr-3 no-scrollbar">
+          <ControlPanelContent />
+        </div>
+      </div>
+
+      <div
+        className="pointer-events-auto absolute right-6 top-6 hidden max-h-[calc(100vh-3rem)] w-[min(24rem,90vw)] flex-col overflow-hidden rounded-xl border border-white/10 bg-black/60 text-sm shadow-2xl backdrop-blur-lg md:flex"
       >
         <div className="flex-1 overflow-y-auto p-6 pl-3">
-          <h2 className="text-xl font-semibold">Battle Log</h2>
-
-          <div className="mt-4">
-            <p className="text-xs uppercase tracking-wide text-white/50">Moves</p>
-            <div
-              ref={moveListRef}
-              className="mt-2 max-h-72 overflow-y-auto rounded-lg bg-white/5 p-3 pr-4"
-            >
-              <ol className="space-y-3 text-sm text-white/80">
-                {moveHistory.length === 0 ? (
-                  <li className="text-white/40">No moves played yet.</li>
-                ) : (
-                  moveHistory.map((entry, index) => {
-                    const moveNumber = Math.floor(index / 2) + 1;
-                    const colorLabel = entry.color === "white" ? "White" : "Black";
-                    return (
-                      <li key={`${entry.notation}-${index}`} className="flex gap-2">
-                        <span className="min-w-[2.5rem] text-xs text-white/40">#{moveNumber}</span>
-                        <div className="flex-1">
-                          <p className="font-medium text-white">
-                            {colorLabel} · {entry.notation}
-                          </p>
-                          {entry.captured && (
-                            <p className="text-[11px] text-white/50">
-                              Captured {PIECE_LABEL[entry.captured.type]}
-                            </p>
-                          )}
-                        </div>
-                      </li>
-                    );
-                  })
-                )}
-              </ol>
-            </div>
-          </div>
-
-          <div className="mt-6 space-y-6 border-t border-white/10 pt-4">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-white/50">Captured by White</p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {capturedByWhite.length === 0 ? (
-                  <span className="text-[11px] text-white/40">None yet.</span>
-                ) : (
-                  capturedByWhite.map((piece, index) => (
-                    <div key={`white-captured-${piece.type}-${index}`} className="flex items-center gap-1 rounded bg-white/10 px-2 py-1">
-                      <img
-                        src={PIECE_IMAGE_MAP[piece.color][piece.type]}
-                        alt={`${piece.color} ${piece.type}`}
-                        className="h-6 w-6 object-contain"
-                      />
-                      <span className="text-[11px] text-white/70">{PIECE_LABEL[piece.type]}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div>
-              <p className="text-xs uppercase tracking-wide text-white/50">Captured by Black</p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {capturedByBlack.length === 0 ? (
-                  <span className="text-[11px] text-white/40">None yet.</span>
-                ) : (
-                  capturedByBlack.map((piece, index) => (
-                    <div key={`black-captured-${piece.type}-${index}`} className="flex items-center gap-1 rounded bg-white/10 px-2 py-1">
-                      <img
-                        src={PIECE_IMAGE_MAP[piece.color][piece.type]}
-                        alt={`${piece.color} ${piece.type}`}
-                        className="h-6 w-6 object-contain"
-                      />
-                      <span className="text-[11px] text-white/70">{PIECE_LABEL[piece.type]}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
+          <BattleLogContent />
         </div>
       </div>
     </div>
