@@ -82,53 +82,105 @@ const getRookGeometry = () =>
   ]);
 
 const getBishopGeometry = () =>
-  getLatheGeometry(
-    withBase(
-      [
-        [0.22, 0],
-        [0.15, 0.4], // Stem
-        [0.12, 0.55], // Neck
-        [0.22, 0.6], // Head base
-        [0.20, 0.8], // Head mid
-        [0.05, 0.92], // Tip base
-        [0.08, 0.95], // Finial
-        [0, 0.98],    // Top
-      ],
-      0.15
-    )
-  );
+  getLatheGeometry([
+    // Base (Smooth tiered style)
+    [0.34, 0],
+    [0.34, 0.04],
+    [0.30, 0.07], 
+    [0.32, 0.10], 
+    [0.32, 0.14],
+    [0.26, 0.18], // Smooth curve in
+
+    // Stem (Elongated concave curve)
+    [0.20, 0.25],
+    [0.15, 0.45], // Waist
+    [0.18, 0.62], // Widen gently
+
+    // Collar (Disc)
+    [0.24, 0.64], // Flare under collar
+    [0.26, 0.66], // Collar outer rim
+    [0.26, 0.69], // Collar thickness
+    [0.20, 0.70], // Collar top in
+
+    // Head (Miter - rounded egg shape)
+    [0.20, 0.70], 
+    [0.25, 0.80], // Bulge
+    [0.22, 0.95], // Taper
+    [0.10, 1.05], // Top narrow
+
+    // Finial
+    [0.08, 1.07],
+    [0, 1.10],
+  ]);
 
 const getQueenGeometry = () =>
-  getLatheGeometry(
-    withBase(
-      [
-        [0.24, 0],
-        [0.16, 0.4], // Stem
-        [0.14, 0.7], // Neck
-        [0.26, 0.85], // Crown flare
-        [0.28, 0.9], // Crown rim
-        [0.15, 0.9], // Hollow
-        [0.15, 0.85], // Inner
-        [0, 0.85],
-      ],
-      0.15
-    )
-  );
+  getLatheGeometry([
+    // Base (Tiered and Bulbous)
+    [0.34, 0],
+    [0.34, 0.05], // Bottom rim
+    [0.30, 0.08], // Step in
+    [0.32, 0.12], // Step out
+    [0.32, 0.15], // Base vertical
+    [0.25, 0.20], // Curve in start
+    [0.30, 0.25], // Belly bulge
+    [0.30, 0.30], // Belly vertical
+    [0.16, 0.50], // Stem taper narrowest
+    [0.18, 0.65], // Stem widen top
+
+    // Collar (Double Ring)
+    [0.22, 0.66], // Under ring 1
+    [0.24, 0.68], // Ring 1 out
+    [0.24, 0.70], // Ring 1 vert
+    [0.20, 0.71], // Ring 1 in
+    [0.23, 0.73], // Ring 2 out
+    [0.23, 0.76], // Ring 2 vert
+    [0.18, 0.77], // Ring 2 in / Neck
+
+    // Crown Head
+    [0.18, 0.80], // Neck start
+    [0.28, 0.95], // Crown flare
+    [0.28, 0.98], // Crown rim height
+    [0.15, 0.98], // Inside rim flat
+    [0.15, 0.95], // Inner cup
+    [0, 0.95],    // Center floor (for dome to sit on)
+  ]);
 
 const getKingGeometry = () =>
-  getLatheGeometry(
-    withBase(
-      [
-        [0.24, 0],
-        [0.16, 0.4], // Stem
-        [0.14, 0.7], // Neck
-        [0.24, 0.85], // Crown flare
-        [0.24, 0.92], // Crown rim
-        [0, 0.92],    // Top flat
-      ],
-      0.15
-    )
-  );
+  getLatheGeometry([
+    // Base (Tiered and Bulbous - matching Queen style)
+    [0.34, 0],
+    [0.34, 0.05], // Bottom rim
+    [0.30, 0.08], // Step in
+    [0.32, 0.12], // Step out
+    [0.32, 0.15], // Base vertical
+    [0.25, 0.20], // Curve in start
+    [0.30, 0.25], // Belly bulge
+    [0.30, 0.30], // Belly vertical
+    [0.17, 0.50], // Stem taper narrowest
+    [0.19, 0.65], // Stem widen top
+
+    // Collar (Double Ring)
+    [0.23, 0.66], // Under ring 1
+    [0.25, 0.68], // Ring 1 out
+    [0.25, 0.70], // Ring 1 vert
+    [0.21, 0.71], // Ring 1 in
+    [0.24, 0.73], // Ring 2 out
+    [0.24, 0.76], // Ring 2 vert
+    [0.19, 0.77], // Ring 2 in / Neck
+
+    // Head (Inverted Cone Crown)
+    [0.19, 0.80], // Neck start
+    [0.30, 0.96], // Flare out (Crown)
+    [0.30, 1.00], // Crown rim vertical
+    [0.26, 1.02], // Slope in to dome
+    
+    // Top Dome (The "hat" inside the crown)
+    [0.15, 1.03], // Dome base
+    [0.18, 1.06], // Dome bulge
+    [0.12, 1.10], // Dome taper
+    [0.08, 1.12], // Finial connector base
+    [0, 1.12],    // Center
+  ]);
 
 const getKnightHeadGeometry = () => {
   if (GEOMETRY_CACHE["knight-head"]) return GEOMETRY_CACHE["knight-head"];
@@ -599,15 +651,9 @@ const MODEL_PRESETS: ReadonlyArray<ModelPreset> = [
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
   },
   {
-    id: "google-gemini-3-flash",
-    label: "Google · Gemini 3 Flash",
-    model: "gemini-3-flash",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-  },
-  {
     id: "google-gemini-3-pro",
     label: "Google · Gemini 3 Pro",
-    model: "gemini-3-pro",
+    model: "gemini-3-pro-preview",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
   },
   {
@@ -877,35 +923,44 @@ export default function Home() {
 
       // Add crown points (coronet)
       const pointCount = 8;
-      const radius = 0.22;
-      const height = 0.88;
+      const radius = 0.26; // Matched to new rim radius
+      const height = 0.98; // Top of rim
       
       for (let i = 0; i < pointCount; i++) {
         const angle = (i / pointCount) * Math.PI * 2;
-        const coneGeo = new THREE.ConeGeometry(0.04, 0.12, 8); // Small spikes
+        // Use smaller, sharper cones for points
+        const coneGeo = new THREE.ConeGeometry(0.05, 0.15, 8); 
         const spike = new THREE.Mesh(coneGeo, material);
         spike.position.set(
           Math.cos(angle) * radius,
-          height,
+          height + 0.05, // Sit on top of rim
           Math.sin(angle) * radius
         );
-        // Tilt outward slightly
-        spike.rotation.x = 0.2; // Local rotation requires pivot or group helper, simpler to just place vertical for now
-        // Actually if we want them to flare out, we need to rotate them based on angle.
-        // Let's keep them vertical for simplicity or compute rotation.
-        // spike.lookAt(0, height + 1, 0) -> looks up and in?
+        // Tilt outward to match flare
+        // Calculate vector from center to position
+        const spikePos = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+        const axis = new THREE.Vector3(-Math.sin(angle), 0, Math.cos(angle));
+        spike.rotateOnAxis(axis, 0.2); // Tilt out
+        
         spike.castShadow = true;
         spike.receiveShadow = true;
         group.add(spike);
       }
 
-      // Central ball
-      const ballGeo = new THREE.SphereGeometry(0.08, 12, 12);
-      const ball = new THREE.Mesh(ballGeo, material);
-      ball.position.y = 0.88;
-      ball.castShadow = true;
-      ball.receiveShadow = true;
-      group.add(ball);
+      // Central Dome and Finial
+      const domeGeo = new THREE.SphereGeometry(0.14, 16, 16, 0, Math.PI * 2, 0, Math.PI / 2); // Hemisphere
+      const dome = new THREE.Mesh(domeGeo, material);
+      dome.position.y = 0.95; // Sit on center floor
+      dome.castShadow = true;
+      dome.receiveShadow = true;
+      group.add(dome);
+
+      const finialGeo = new THREE.SphereGeometry(0.06, 12, 12);
+      const finial = new THREE.Mesh(finialGeo, material);
+      finial.position.y = 0.95 + 0.14 + 0.04; // On top of dome
+      finial.castShadow = true;
+      finial.receiveShadow = true;
+      group.add(finial);
 
       mesh = group;
     } else if (type === "king") {
@@ -917,25 +972,65 @@ export default function Home() {
       body.receiveShadow = true;
       group.add(body);
 
-      const crossGeo = new THREE.BoxGeometry(0.06, 0.2, 0.06);
-      const crossBarGeo = new THREE.BoxGeometry(0.15, 0.06, 0.06);
-      
-      const crossV = new THREE.Mesh(crossGeo, material);
-      crossV.position.y = 1.05;
-      crossV.castShadow = true;
-      group.add(crossV);
-      
-      const crossH = new THREE.Mesh(crossBarGeo, material);
-      crossH.position.y = 1.05;
-      crossH.castShadow = true;
-      group.add(crossH);
+      // Cross Finial
+      const crossGroup = new THREE.Group();
+      crossGroup.position.y = 1.12; // Sits on top of the lathe geometry
 
+      // Small connector orb
+      const connectorGeo = new THREE.SphereGeometry(0.06, 8, 8);
+      const connector = new THREE.Mesh(connectorGeo, material);
+      connector.position.y = 0.04;
+      connector.castShadow = true;
+      crossGroup.add(connector);
+
+      // Cross vertical
+      const crossVGeo = new THREE.BoxGeometry(0.06, 0.22, 0.06);
+      const crossV = new THREE.Mesh(crossVGeo, material);
+      crossV.position.y = 0.15;
+      crossV.castShadow = true;
+      crossGroup.add(crossV);
+      
+      // Cross horizontal
+      const crossHGeo = new THREE.BoxGeometry(0.16, 0.06, 0.06);
+      const crossH = new THREE.Mesh(crossHGeo, material);
+      crossH.position.y = 0.15;
+      crossH.castShadow = true;
+      crossGroup.add(crossH);
+
+      group.add(crossGroup);
+
+      mesh = group;
+    } else if (type === "bishop") {
+      const group = new THREE.Group();
+      const bodyGeo = getBishopGeometry();
+      const body = new THREE.Mesh(bodyGeo, material);
+      body.castShadow = true;
+      body.receiveShadow = true;
+      group.add(body);
+
+      // Diagonal cut (Cleft)
+      // Use a smaller box that stays within the head volume mostly
+      const cleftGeo = new THREE.BoxGeometry(0.04, 0.25, 0.25);
+      const cleftMat = new THREE.MeshStandardMaterial({ 
+        color: 0x1a1a1a, 
+        roughness: 0.9,
+        metalness: 0.1
+      });
+      const cleft = new THREE.Mesh(cleftGeo, cleftMat);
+      
+      // Position: Centered vertically on the head, shifted forward (+Z)
+      // Rotated to cut diagonally
+      cleft.position.set(0, 0.90, 0.12);
+      cleft.rotation.x = -Math.PI / 4; // 45 degree angle
+      
+      cleft.castShadow = false;
+      cleft.receiveShadow = true;
+      group.add(cleft);
       mesh = group;
     } else {
       let geometry: THREE.BufferGeometry;
       switch (type) {
         case "pawn": geometry = getPawnGeometry(); break;
-        case "bishop": geometry = getBishopGeometry(); break;
         default: geometry = getPawnGeometry(); break;
       }
       const m = new THREE.Mesh(geometry, material);

@@ -199,6 +199,16 @@ export async function POST(request: NextRequest) {
 
   const { turn, legalMoves, board, history, apiKey, model, baseUrl } = payload;
 
+  const resolveModelAlias = (input?: string) => {
+    if (!input) return input;
+    const trimmed = input.trim();
+    if (trimmed === "gemini-3-pro") return "gemini-3-pro-preview";
+    if (trimmed === "gemini-3-flash") return "gemini-2.5-flash";
+    return trimmed;
+  };
+
+  const resolvedModel = resolveModelAlias(model);
+
   if (!turn || !Array.isArray(legalMoves) || legalMoves.length === 0) {
     return NextResponse.json(
       { error: "Missing turn or legalMoves" },
@@ -213,7 +223,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!apiKey || !model || apiKey.trim() === "" || model.trim() === "") {
+  if (!apiKey || !resolvedModel || apiKey.trim() === "" || resolvedModel.trim() === "") {
     return NextResponse.json(
       { error: "API key and model are required. Please provide valid credentials." },
       { status: 400 }
@@ -226,7 +236,7 @@ export async function POST(request: NextRequest) {
   
   // Gemini uses a different endpoint structure
   const endpoint = isGemini 
-    ? `${normalizeBaseUrl(baseUrl)}/models/${model}:generateContent`
+    ? `${normalizeBaseUrl(baseUrl)}/models/${resolvedModel}:generateContent`
     : `${normalizeBaseUrl(baseUrl)}/chat/completions`;
 
   const systemPrompt = `You are a precise chess engine. You must choose exactly one legal move for ${turn}. 
@@ -276,7 +286,7 @@ Playing as ${turn}. Return ONLY: {"from":[r,c],"to":[r,c]}`;
   } else {
     // OpenAI/Anthropic format
     requestBody = {
-      model,
+      model: resolvedModel,
       temperature: 0.1,
       max_tokens: 500,
       messages: [
@@ -331,8 +341,21 @@ Playing as ${turn}. Return ONLY: {"from":[r,c],"to":[r,c]}`;
           errorMessage = errorData.message;
         }
         
-        // Check for rate limit errors (429) - these might be temporary
-        if (response.status === 429) {
+        // Detect Gemini 3 Pro Preview free tier exhaustion
+        const isGemini3QuotaError = 
+          (errorData.error?.status === "RESOURCE_EXHAUSTED" || response.status === 429) &&
+          (errorMessage.includes("limit: 0") || 
+           errorMessage.includes("gemini-3-pro") ||
+           errorMessage.includes("free_tier_requests"));
+        
+        const isGemini3Model = resolvedModel?.includes("gemini-3") || 
+                               resolvedModel?.includes("pro-preview") ||
+                               errorMessage.includes("gemini-3-pro");
+        
+        if (isGemini3QuotaError && isGemini3Model) {
+          errorMessage = "Gemini 3 Pro Preview currently has no free tier. Please enable billing in Google AI Studio (https://ai.google.dev/) or switch to a model with a free tier like 'Gemini 2.5 Flash' or 'GPT-4o'.";
+        } else if (response.status === 429) {
+          // Check for rate limit errors (429) - these might be temporary
           const retryAfter = response.headers.get("retry-after");
           if (retryAfter) {
             errorMessage += ` Please wait ${retryAfter} seconds before trying again.`;
@@ -362,9 +385,26 @@ Playing as ${turn}. Return ONLY: {"from":[r,c],"to":[r,c]}`;
     // Check if the response itself contains an error (some APIs do this)
     if (data?.error) {
       console.warn("LLM API returned error in response body:", data.error);
+      
+      let customMsg = data.error.message || JSON.stringify(data.error);
+      
+      // Detect Gemini 3 Free Tier exhaustion
+      const isGemini3InError = customMsg.includes("gemini-3-pro") || 
+                                resolvedModel?.includes("gemini-3") || 
+                                resolvedModel?.includes("pro-preview");
+      
+      if (
+        isGemini3InError &&
+        (data.error.status === "RESOURCE_EXHAUSTED" || 
+         customMsg.includes("limit: 0") ||
+         customMsg.includes("free_tier_requests"))
+      ) {
+        customMsg = "Gemini 3 Pro Preview currently has no free tier. Please enable billing in Google AI Studio (https://ai.google.dev/) or switch to a model with a free tier like 'Gemini 2.5 Flash' or 'GPT-4o'.";
+      }
+
       return NextResponse.json(
         { 
-          error: `LLM API error: ${data.error.message || data.error.code || JSON.stringify(data.error)}` 
+          error: `LLM API error: ${customMsg}` 
         },
         { status: 422 }
       );
