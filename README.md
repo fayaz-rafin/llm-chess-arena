@@ -16,6 +16,17 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## OpenRouter setup
+
+1. Create a `.env` file (it is gitignored) and set:
+   - `OPENROUTER_API_KEY`
+   - Optional: `OPENROUTER_HTTP_REFERER`, `OPENROUTER_APP_TITLE`
+2. Rate limiting is enabled server-side for `/api/llm-move`:
+   - Defaults (smooth play): `OPENROUTER_MAX_RPM=80`, `OPENROUTER_MAX_TPM=60000`
+   - Cost-controlled: `OPENROUTER_MAX_RPM=60`, `OPENROUTER_MAX_TPM=25000`
+
+You can copy `env.example` → `.env` as a starting point.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.

@@ -1,0 +1,13 @@
+# Optional (recommended by OpenRouter)
+# OPENROUTER_HTTP_REFERER=http://localhost:3000
+# OPENROUTER_APP_TITLE=LLM Chess Arena
+
+## Rate limiting (server-side)
+# Profiles:
+# - smooth (default):         OPENROUTER_MAX_RPM=80, OPENROUTER_MAX_TPM=60000
+# - cost-controlled:          OPENROUTER_MAX_RPM=60, OPENROUTER_MAX_TPM=25000
+OPENROUTER_RATE_LIMIT_PROFILE=smooth
+
+# Optional overrides (take precedence over the profile defaults)
+# OPENROUTER_MAX_RPM=80
+# OPENROUTER_MAX_TPM=60000
