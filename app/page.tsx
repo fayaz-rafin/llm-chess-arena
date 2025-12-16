@@ -603,73 +603,49 @@ const CUSTOM_PRESET_ID = "custom";
 const sanitizeId = (value: string) =>
   value.replace(/[^a-zA-Z0-9-_]/g, "_").slice(0, 120);
 
-const resolveHostSegment = (baseUrl: string) => {
-  try {
-    const url = new URL(baseUrl);
-    return sanitizeId(url.host || "litellm");
-  } catch {
-    return sanitizeId(baseUrl);
-  }
-};
-
 type ModelPreset = {
   id: string;
   label: string;
   model: string;
-  baseUrl: string;
 };
 
 const MODEL_PRESETS: ReadonlyArray<ModelPreset> = [
   {
-    id: "openai-gpt-4o",
-    label: "OpenAI · GPT-4o",
-    model: "gpt-4o",
-    baseUrl: "https://api.openai.com/v1",
+    id: "openrouter-openai-gpt-4o",
+    label: "OpenRouter · OpenAI / GPT-4o",
+    model: "openai/gpt-4o",
   },
   {
-    id: "openai-gpt-5",
-    label: "OpenAI · GPT-5",
-    model: "gpt-5",
-    baseUrl: "https://api.openai.com/v1",
+    id: "openrouter-openai-gpt-5",
+    label: "OpenRouter · OpenAI / GPT-5",
+    model: "openai/gpt-5",
   },
   {
-    id: "anthropic-claude-4.5-sonnet",
-    label: "Anthropic · Claude 4.5 Sonnet",
-    model: "claude-4.5-sonnet",
-    baseUrl: "https://api.anthropic.com/v1",
+    id: "openrouter-anthropic-claude-3.5-sonnet",
+    label: "OpenRouter · Anthropic / Claude 3.5 Sonnet",
+    model: "anthropic/claude-3.5-sonnet",
   },
   {
-    id: "google-gemini-2.5-flash",
-    label: "Google · Gemini 2.5 Flash",
-    model: "gemini-2.5-flash",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    id: "openrouter-google-gemini-2.5-flash",
+    label: "OpenRouter · Google / Gemini 2.5 Flash",
+    model: "google/gemini-2.5-flash",
   },
   {
-    id: "google-gemini-2.5-pro",
-    label: "Google · Gemini 2.5 Pro",
-    model: "gemini-2.5-pro",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-  },
-  {
-    id: "google-gemini-3-pro",
-    label: "Google · Gemini 3 Pro",
-    model: "gemini-3-pro-preview",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    id: "openrouter-google-gemini-2.5-pro",
+    label: "OpenRouter · Google / Gemini 2.5 Pro",
+    model: "google/gemini-2.5-pro",
   },
   {
     id: CUSTOM_PRESET_ID,
-    label: "Custom configuration…",
+    label: "Custom model id…",
     model: "",
-    baseUrl: "",
   },
 ];
 
 const DEFAULT_PRESET = MODEL_PRESETS[0]!;
 
 type LlmConfig = {
-  apiKey: string;
   model: string;
-  baseUrl: string;
 };
 
 export default function Home() {
@@ -695,21 +671,16 @@ export default function Home() {
   const [whitePresetId, setWhitePresetId] = useState(DEFAULT_PRESET.id);
   const [blackPresetId, setBlackPresetId] = useState(DEFAULT_PRESET.id);
   const [whiteConfig, setWhiteConfig] = useState<LlmConfig>({
-    apiKey: "",
     model: DEFAULT_PRESET.model,
-    baseUrl: DEFAULT_PRESET.baseUrl,
   });
   const [blackConfig, setBlackConfig] = useState<LlmConfig>({
-    apiKey: "",
     model: DEFAULT_PRESET.model,
-    baseUrl: DEFAULT_PRESET.baseUrl,
   });
   const [moveDelay, setMoveDelay] = useState(MOVE_DELAY_MS);
   const [dynamicPresets, setDynamicPresets] = useState<ModelPreset[]>([]);
-  const [liteLlmBaseUrl, setLiteLlmBaseUrl] = useState("");
-  const [liteLlmApiKey, setLiteLlmApiKey] = useState("");
-  const [liteLlmStatus, setLiteLlmStatus] = useState<string | null>(null);
-  const [isLoadingLiteLlm, setIsLoadingLiteLlm] = useState(false);
+  const [openRouterStatus, setOpenRouterStatus] = useState<string | null>(null);
+  const [isLoadingOpenRouterModels, setIsLoadingOpenRouterModels] =
+    useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isControlsOpen, setIsControlsOpen] = useState(false);
   const [isLogOpen, setIsLogOpen] = useState(false);
@@ -1110,9 +1081,7 @@ export default function Home() {
         legalMoves,
         board,
         history,
-        apiKey: config.apiKey,
         model: config.model,
-        baseUrl: config.baseUrl,
       };
 
       const response = await fetch("/api/llm-move", {
@@ -1368,20 +1337,18 @@ export default function Home() {
   const handleStart = () => {
     if (!sceneReadyRef.current || isPlayingRef.current) return;
 
-    // Validate API keys and models
-    const whiteApiKey = whiteConfig.apiKey.trim();
-    const blackApiKey = blackConfig.apiKey.trim();
+    // Validate models
     const whiteModel = whiteConfig.model.trim();
     const blackModel = blackConfig.model.trim();
 
-    if (!whiteApiKey || !whiteModel) {
-      setError("White LLM: API key and model are required");
+    if (!whiteModel) {
+      setError("White LLM: model is required");
       setStatus("Cannot start: White LLM configuration is incomplete");
       return;
     }
 
-    if (!blackApiKey || !blackModel) {
-      setError("Black LLM: API key and model are required");
+    if (!blackModel) {
+      setError("Black LLM: model is required");
       setStatus("Cannot start: Black LLM configuration is incomplete");
       return;
     }
@@ -1425,14 +1392,10 @@ export default function Home() {
   ) => {
     if (color === "white") {
       setWhiteConfig((prev) => ({ ...prev, [field]: value }));
-      if (field !== "apiKey") {
-        setWhitePresetId(CUSTOM_PRESET_ID);
-      }
+      setWhitePresetId(CUSTOM_PRESET_ID);
     } else {
       setBlackConfig((prev) => ({ ...prev, [field]: value }));
-      if (field !== "apiKey") {
-        setBlackPresetId(CUSTOM_PRESET_ID);
-      }
+      setBlackPresetId(CUSTOM_PRESET_ID);
     }
     // Clear error when user updates configuration
     setError(null);
@@ -1449,7 +1412,6 @@ export default function Home() {
           setWhiteConfig((prev) => ({
             ...prev,
             model: preset.model,
-            baseUrl: preset.baseUrl,
           }));
         }
       } else {
@@ -1458,7 +1420,6 @@ export default function Home() {
           setBlackConfig((prev) => ({
             ...prev,
             model: preset.model,
-            baseUrl: preset.baseUrl,
           }));
         }
       }
@@ -1469,15 +1430,9 @@ export default function Home() {
   const whiteIsCustom = whitePresetId === CUSTOM_PRESET_ID;
   const blackIsCustom = blackPresetId === CUSTOM_PRESET_ID;
 
-  const loadLiteLlmModels = useCallback(async () => {
-    const trimmedBase = liteLlmBaseUrl.trim();
-    if (!trimmedBase) {
-      setLiteLlmStatus("Enter a LiteLLM base URL first.");
-      return;
-    }
-
-    setIsLoadingLiteLlm(true);
-    setLiteLlmStatus("Fetching models from LiteLLM...");
+  const loadOpenRouterModels = useCallback(async () => {
+    setIsLoadingOpenRouterModels(true);
+    setOpenRouterStatus("Fetching models from OpenRouter...");
 
     try {
       const response = await fetch("/api/litellm/models", {
@@ -1485,56 +1440,51 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          baseUrl: trimmedBase,
-          apiKey: liteLlmApiKey.trim() || undefined,
-        }),
+        body: JSON.stringify({}),
       });
 
       const payload: {
-        baseUrl?: string;
         models?: Array<{
           id: string;
           label?: string;
           provider?: string | null;
         }>;
-        message?: string;
         error?: string;
       } = await response.json();
 
       if (!response.ok) {
-        setLiteLlmStatus(payload.error || `LiteLLM request failed (${response.status}).`);
+        setOpenRouterStatus(
+          payload.error || `OpenRouter request failed (${response.status}).`
+        );
         return;
       }
 
-      const normalizedBase = payload.baseUrl ?? trimmedBase;
-      const hostSegment = resolveHostSegment(normalizedBase);
       const models = payload.models ?? [];
-
       const nextPresets: ModelPreset[] = models.map((model) => {
         const prettyLabel = [model.provider, model.label || model.id]
           .filter(Boolean)
           .join(" · ");
         return {
-          id: `litellm-${hostSegment}-${sanitizeId(model.id)}`,
+          id: `openrouter-${sanitizeId(model.id)}`,
           label: prettyLabel || model.id,
           model: model.id,
-          baseUrl: normalizedBase,
         };
       });
 
       setDynamicPresets(nextPresets);
-      setLiteLlmStatus(`Loaded ${nextPresets.length} model${nextPresets.length === 1 ? "" : "s"} from LiteLLM.`);
+      setOpenRouterStatus(
+        `Loaded ${nextPresets.length} model${nextPresets.length === 1 ? "" : "s"} from OpenRouter.`
+      );
     } catch (error) {
-      setLiteLlmStatus(
+      setOpenRouterStatus(
         error instanceof Error
-          ? `Failed to fetch from LiteLLM: ${error.message}`
-          : "Failed to fetch from LiteLLM."
+          ? `Failed to fetch from OpenRouter: ${error.message}`
+          : "Failed to fetch from OpenRouter."
       );
     } finally {
-      setIsLoadingLiteLlm(false);
+      setIsLoadingOpenRouterModels(false);
     }
-  }, [liteLlmApiKey, liteLlmBaseUrl]);
+  }, []);
 
   useEffect(() => {
     setWhitePresetId((current) => {
@@ -1562,6 +1512,26 @@ export default function Home() {
       )}
 
       <div className="mt-4 space-y-3">
+        <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs uppercase tracking-wide text-white/50">OpenRouter</p>
+            <button
+              onClick={loadOpenRouterModels}
+              className="rounded-md bg-white/10 px-3 py-2 text-sm transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isLoadingOpenRouterModels}
+            >
+              {isLoadingOpenRouterModels ? "Loading models..." : "Load model list"}
+            </button>
+          </div>
+          {openRouterStatus && (
+            <p className="mt-2 text-[11px] text-white/60">{openRouterStatus}</p>
+          )}
+          <p className="mt-2 text-[11px] text-white/40">
+            This arena calls OpenRouter from the server using{" "}
+            <code className="rounded bg-white/10 px-1">OPENROUTER_API_KEY</code>.
+          </p>
+        </div>
+
         <div>
           <p className="text-xs uppercase tracking-wide text-white/50">Battle Controls</p>
           <div className="mt-2 flex flex-wrap gap-2 text-sm">
@@ -1570,8 +1540,6 @@ export default function Home() {
               className="rounded-md bg-teal-400 px-3 py-2 font-semibold text-slate-900 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-500"
               disabled={
                 isPlaying ||
-                !whiteConfig.apiKey.trim() ||
-                !blackConfig.apiKey.trim() ||
                 !whiteConfig.model.trim() ||
                 !blackConfig.model.trim()
               }
@@ -1629,32 +1597,17 @@ export default function Home() {
             ))}
           </select>
           <input
-            type="password"
-            placeholder="API key"
-            value={whiteConfig.apiKey}
-            onChange={(event) => handleConfigChange("white", "apiKey", event.target.value)}
-            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none"
-          />
-          <input
             type="text"
-            placeholder="Model ID"
+            placeholder="OpenRouter model id (e.g. openai/gpt-4o)"
             value={whiteConfig.model}
             onChange={(event) => handleConfigChange("white", "model", event.target.value)}
             disabled={!whiteIsCustom}
             className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           />
-          <input
-            type="text"
-            placeholder="Base URL"
-            value={whiteConfig.baseUrl}
-            onChange={(event) => handleConfigChange("white", "baseUrl", event.target.value)}
-            disabled={!whiteIsCustom}
-            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-          />
           <p className="text-[11px] text-white/40">
             {whiteIsCustom
-              ? "Set a custom model ID and base URL for this side."
-              : "Preset locks the model and base URL. Choose Custom to edit manually."}
+              ? "Set a custom OpenRouter model id for this side."
+              : "Preset locks the model id. Choose Custom to edit manually."}
           </p>
         </div>
 
@@ -1672,40 +1625,25 @@ export default function Home() {
             ))}
           </select>
           <input
-            type="password"
-            placeholder="API key"
-            value={blackConfig.apiKey}
-            onChange={(event) => handleConfigChange("black", "apiKey", event.target.value)}
-            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none"
-          />
-          <input
             type="text"
-            placeholder="Model ID"
+            placeholder="OpenRouter model id (e.g. openai/gpt-4o)"
             value={blackConfig.model}
             onChange={(event) => handleConfigChange("black", "model", event.target.value)}
             disabled={!blackIsCustom}
             className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           />
-          <input
-            type="text"
-            placeholder="Base URL"
-            value={blackConfig.baseUrl}
-            onChange={(event) => handleConfigChange("black", "baseUrl", event.target.value)}
-            disabled={!blackIsCustom}
-            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-          />
           <p className="text-[11px] text-white/40">
             {blackIsCustom
-              ? "Set a custom model ID and base URL for this side."
-              : "Preset locks the model and base URL. Choose Custom to edit manually."}
+              ? "Set a custom OpenRouter model id for this side."
+              : "Preset locks the model id. Choose Custom to edit manually."}
           </p>
         </div>
       </div>
 
       <p className="mt-4 text-[11px] text-white/40">
-        Provide API keys for two different LLMs (or the same model twice) to let
-        them duel automatically. Keys are stored only in your browser and sent
-        directly to the move-selection API route for each turn.
+        No API keys are stored in your browser. This arena calls OpenRouter from
+        the server using{" "}
+        <code className="rounded bg-white/10 px-1">OPENROUTER_API_KEY</code>.
       </p>
     </>
   );

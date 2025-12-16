@@ -1,4 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { openRouterChatCompletion } from "@/app/lib/openrouter";
+import {
+  consumeRateLimit,
+  estimateTokensForMessages,
+  getOpenRouterRateLimitConfig,
+} from "@/app/lib/rateLimit";
 
 type Move = {
   from: [number, number];
@@ -11,14 +17,6 @@ type Piece = {
 };
 
 type BoardState = (Piece | null)[][];
-
-const DEFAULT_BASE_URL = "https://api.openai.com/v1";
-
-const normalizeBaseUrl = (raw?: string) => {
-  if (!raw) return DEFAULT_BASE_URL;
-  const trimmed = raw.trim().replace(/\/$/, "");
-  return trimmed.length > 0 ? trimmed : DEFAULT_BASE_URL;
-};
 
 const legalMoveFromResponse = (text: string): Move | null => {
   if (!text || typeof text !== "string") return null;
@@ -183,9 +181,7 @@ export async function POST(request: NextRequest) {
     legalMoves?: Move[];
     board?: BoardState;
     history?: string[];
-    apiKey?: string;
     model?: string;
-    baseUrl?: string;
   } = {};
 
   try {
@@ -197,17 +193,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { turn, legalMoves, board, history, apiKey, model, baseUrl } = payload;
-
-  const resolveModelAlias = (input?: string) => {
-    if (!input) return input;
-    const trimmed = input.trim();
-    if (trimmed === "gemini-3-pro") return "gemini-3-pro-preview";
-    if (trimmed === "gemini-3-flash") return "gemini-2.5-flash";
-    return trimmed;
-  };
-
-  const resolvedModel = resolveModelAlias(model);
+  const { turn, legalMoves, board, history, model } = payload;
 
   if (!turn || !Array.isArray(legalMoves) || legalMoves.length === 0) {
     return NextResponse.json(
@@ -223,21 +209,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!apiKey || !resolvedModel || apiKey.trim() === "" || resolvedModel.trim() === "") {
+  const resolvedModel = typeof model === "string" ? model.trim() : "";
+  if (!resolvedModel) {
     return NextResponse.json(
-      { error: "API key and model are required. Please provide valid credentials." },
+      { error: "Model is required. Provide an OpenRouter model id (e.g. openai/gpt-4o)." },
       { status: 400 }
     );
   }
-
-  // Detect if this is a Gemini API call
-  const isGemini = baseUrl?.includes("generativelanguage.googleapis.com") || 
-                   baseUrl?.includes("googleapis.com");
-  
-  // Gemini uses a different endpoint structure
-  const endpoint = isGemini 
-    ? `${normalizeBaseUrl(baseUrl)}/models/${resolvedModel}:generateContent`
-    : `${normalizeBaseUrl(baseUrl)}/chat/completions`;
 
   const systemPrompt = `You are a precise chess engine. You must choose exactly one legal move for ${turn}. 
 
@@ -263,297 +241,121 @@ Recent moves: ${recentHistory.join(" | ")}
 
 Playing as ${turn}. Return ONLY: {"from":[r,c],"to":[r,c]}`;
 
-  // Build request body - different formats for different APIs
-  let requestBody: any;
-  
-  if (isGemini) {
-    // Gemini API format
-    // Note: Gemini 2.5 Flash uses "thinking" tokens for internal reasoning
-    // These count toward maxOutputTokens, so we need a much higher limit
-    // Thinking tokens can use 1000+ tokens, so we set a high limit
-    requestBody = {
-      contents: [{
-        parts: [{
-          text: `${systemPrompt}\n\n${userPrompt}`
-        }]
-      }],
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 8192, // Maximum limit - Gemini 2.5 Flash uses "thinking tokens" (internal reasoning) that can consume most of this
-        responseMimeType: "application/json",
-      }
-    };
-  } else {
-    // OpenAI/Anthropic format
-    requestBody = {
-      model: resolvedModel,
-      temperature: 0.1,
-      max_tokens: 500,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-    };
-
-    // Only add response_format for OpenAI-compatible APIs
-    const isOpenAICompatible = baseUrl?.includes("openai.com") || 
-                               baseUrl?.includes("anthropic.com") ||
-                               !baseUrl || baseUrl === DEFAULT_BASE_URL;
-    
-    if (isOpenAICompatible) {
-      try {
-        requestBody.response_format = { type: "json_object" };
-      } catch {
-        // If there's an issue, just continue without it
-      }
-    }
-  }
-
-  // Gemini uses different headers
-  const headers: HeadersInit = {
-    "Content-Type": "application/json",
-  };
-  
-  if (isGemini) {
-    // Gemini uses x-goog-api-key header instead of Authorization Bearer
-    headers["x-goog-api-key"] = apiKey;
-  } else {
-    headers["Authorization"] = `Bearer ${apiKey}`;
-  }
-
   try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.warn("LLM API error", errorText);
-      let errorMessage = `LLM API call failed with status ${response.status}.`;
-      
-      try {
-        const errorData = JSON.parse(errorText);
-        if (errorData.error?.message) {
-          errorMessage = errorData.error.message;
-        } else if (errorData.message) {
-          errorMessage = errorData.message;
-        }
-        
-        // Detect Gemini 3 Pro Preview free tier exhaustion
-        const isGemini3QuotaError = 
-          (errorData.error?.status === "RESOURCE_EXHAUSTED" || response.status === 429) &&
-          (errorMessage.includes("limit: 0") || 
-           errorMessage.includes("gemini-3-pro") ||
-           errorMessage.includes("free_tier_requests"));
-        
-        const isGemini3Model = resolvedModel?.includes("gemini-3") || 
-                               resolvedModel?.includes("pro-preview") ||
-                               errorMessage.includes("gemini-3-pro");
-        
-        if (isGemini3QuotaError && isGemini3Model) {
-          errorMessage = "Gemini 3 Pro Preview currently has no free tier. Please enable billing in Google AI Studio (https://ai.google.dev/) or switch to a model with a free tier like 'Gemini 2.5 Flash' or 'GPT-4o'.";
-        } else if (response.status === 429) {
-          // Check for rate limit errors (429) - these might be temporary
-          const retryAfter = response.headers.get("retry-after");
-          if (retryAfter) {
-            errorMessage += ` Please wait ${retryAfter} seconds before trying again.`;
-          } else {
-            errorMessage += " This usually means you've hit your API quota/rate limit. Please check your billing or wait a moment and try again.";
-          }
-        }
-      } catch {
-        // If error text isn't JSON, use it as-is
-        if (errorText) {
-          errorMessage = errorText.substring(0, 500);
-        }
-      }
-      
-      return NextResponse.json(
-        { 
-          error: errorMessage,
-          statusCode: response.status,
-          isRateLimit: response.status === 429
-        },
-        { status: response.status }
-      );
-    }
-
-    const data = await response.json();
-    
-    // Check if the response itself contains an error (some APIs do this)
-    if (data?.error) {
-      console.warn("LLM API returned error in response body:", data.error);
-      
-      let customMsg = data.error.message || JSON.stringify(data.error);
-      
-      // Detect Gemini 3 Free Tier exhaustion
-      const isGemini3InError = customMsg.includes("gemini-3-pro") || 
-                                resolvedModel?.includes("gemini-3") || 
-                                resolvedModel?.includes("pro-preview");
-      
-      if (
-        isGemini3InError &&
-        (data.error.status === "RESOURCE_EXHAUSTED" || 
-         customMsg.includes("limit: 0") ||
-         customMsg.includes("free_tier_requests"))
-      ) {
-        customMsg = "Gemini 3 Pro Preview currently has no free tier. Please enable billing in Google AI Studio (https://ai.google.dev/) or switch to a model with a free tier like 'Gemini 2.5 Flash' or 'GPT-4o'.";
-      }
-
-      return NextResponse.json(
-        { 
-          error: `LLM API error: ${customMsg}` 
-        },
-        { status: 422 }
-      );
-    }
-    
-    // Log the full response for debugging
-    console.log("LLM API response structure:", JSON.stringify(data, null, 2).substring(0, 500));
-    
-    // Try different response formats - some APIs structure responses differently
-    let content: string = "";
-    
-    if (isGemini) {
-      // Gemini API response format
-      const candidate = data?.candidates?.[0];
-      const candidateContent = candidate?.content;
-      
-      if (candidateContent?.parts && Array.isArray(candidateContent.parts) && candidateContent.parts.length > 0) {
-        // Check all parts for text content
-        for (const part of candidateContent.parts) {
-          if (part?.text) {
-            content = part.text;
-            break;
-          }
-        }
-      }
-      
-      // If MAX_TOKENS and no content, check if there's any partial response
-      if (!content && candidate?.finishReason === "MAX_TOKENS") {
-        console.warn("Gemini hit MAX_TOKENS with no content. This may be due to thinking tokens consuming the limit.");
-        // Try to see if there's any text in the response at all
-        if (candidateContent && JSON.stringify(candidateContent).includes("text")) {
-          // Try to extract any partial JSON
-          const responseStr = JSON.stringify(data);
-          const jsonMatch = responseStr.match(/\{"from":\[[\d,]+],"to":\[[\d,]+]\}/);
-          if (jsonMatch) {
-            content = jsonMatch[0];
-          }
-        }
-      }
-    } else {
-      // Standard OpenAI format
-      if (data?.choices?.[0]?.message?.content) {
-        content = data.choices[0].message.content;
-      }
-      // Alternative format (some APIs)
-      else if (data?.content) {
-        content = data.content;
-      }
-      // Another alternative
-      else if (data?.message?.content) {
-        content = data.message.content;
-      }
-      // Check if response is in a different structure
-      else if (data?.choices && Array.isArray(data.choices) && data.choices.length > 0) {
-        const firstChoice = data.choices[0];
-        if (firstChoice?.text) {
-          content = firstChoice.text;
-        } else if (firstChoice?.delta?.content) {
-          content = firstChoice.delta.content;
-        } else if (typeof firstChoice === "string") {
-          content = firstChoice;
-        }
-      }
-      // Direct string response
-      else if (typeof data === "string") {
-        content = data;
-      }
-    }
-    
-    // Check for truncated response - but try to parse it anyway
-    const finishReason = isGemini 
-      ? data?.candidates?.[0]?.finishReason
-      : data?.choices?.[0]?.finish_reason;
-    
-    if (finishReason === "length" || finishReason === "MAX_TOKENS") {
-      console.warn("LLM response was truncated due to token limit, but attempting to parse anyway");
-      // Don't return error immediately - try to parse what we have
-    }
-    
-    if (!content || content.trim() === "") {
-      console.warn("LLM returned empty response. Full response:", JSON.stringify(data, null, 2));
-      
-      // Special handling for Gemini MAX_TOKENS
-      if (isGemini && finishReason === "MAX_TOKENS") {
-        const usage = data?.usageMetadata;
-        const thoughtsTokens = usage?.thoughtsTokenCount || 0;
-        return NextResponse.json(
-          { 
-            error: `${model} hit the token limit. The model used ${thoughtsTokens} "thinking tokens" (internal reasoning) which count toward the output limit. This is a built-in feature of some Gemini models that cannot be disabled. Recommendation: Use a different model like GPT-4o, Claude, or a standard Gemini model (if available) for more reliable chess moves.`,
-            debug: `Finish reason: ${finishReason}, Thinking tokens: ${thoughtsTokens}, Total tokens: ${usage?.totalTokenCount || 'unknown'}, Max output tokens: 8192`
-          },
-          { status: 422 }
-        );
-      }
-      
-      return NextResponse.json(
-        { 
-          error: "LLM returned an empty response. Please check your API key and model configuration. The API may use a different response format.",
-          debug: `Response structure: ${JSON.stringify(Object.keys(data || {})).substring(0, 200)}`
-        },
-        { status: 422 }
-      );
-    }
-
-    // Clean up the content - remove markdown code blocks if present
-    content = content.trim();
-    if (content.startsWith("```")) {
-      const lines = content.split("\n");
-      content = lines.slice(1, -1).join("\n").trim();
-    }
-    
-    // If response was truncated, try harder to extract the move
-    if (finishReason === "length") {
-      console.warn("Response was truncated, attempting to extract move from partial content:", content.substring(0, 100));
-      // The parser should handle incomplete JSON, so continue
-    }
-
-    const move = legalMoveFromResponse(content);
-
-    if (!move) {
-      console.warn("Failed to parse LLM response. Raw content:", content.substring(0, 500));
-      return NextResponse.json(
-        { 
-          error: `Unable to parse LLM move response. The LLM did not return a valid move format. Expected: {"from":[row,col],"to":[row,col]}. Received: ${content.substring(0, 200)}` 
-        },
-        { status: 422 }
-      );
-    }
-
-    const isLegal = legalMoves.some(
-      (legalMove) =>
-        legalMove.from[0] === move.from[0] &&
-        legalMove.from[1] === move.from[1] &&
-        legalMove.to[0] === move.to[0] &&
-        legalMove.to[1] === move.to[1]
+    const MAX_ATTEMPTS = 5;
+    const legalMoveSet = new Set(
+      legalMoves.map((entry) => JSON.stringify(entry))
     );
+    const { maxRequestsPerMinute, maxEstimatedTokensPerMinute } =
+      getOpenRouterRateLimitConfig();
 
-    if (!isLegal) {
-      return NextResponse.json(
-        { error: "LLM suggested an illegal move. The move is not in the list of legal moves." },
-        { status: 422 }
-      );
+    const cleanContent = (raw: string) => {
+      const trimmed = raw.trim();
+      if (!trimmed.startsWith("```")) return trimmed;
+      const lines = trimmed.split("\n");
+      return lines.slice(1, -1).join("\n").trim();
+    };
+
+    const resolveClientId = () => {
+      const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+      const realIp = request.headers.get("x-real-ip")?.trim();
+      return forwarded || realIp || "unknown";
+    };
+
+    const clientId = resolveClientId();
+
+    let lastRawResponse = "";
+    let attempt = 0;
+
+    while (attempt < MAX_ATTEMPTS) {
+      attempt += 1;
+
+      const attemptPrompt =
+        attempt === 1
+          ? userPrompt
+          : `${userPrompt}
+
+The previous response was invalid.
+- Attempt: ${attempt - 1}
+- Previous response (verbatim): ${JSON.stringify(lastRawResponse.slice(0, 500))}
+
+CRITICAL: Choose ONE move ONLY from the provided legalMoves list. Output must be EXACT JSON: {"from":[r,c],"to":[r,c]}.`;
+
+      const messages = [
+        { role: "system" as const, content: systemPrompt },
+        { role: "user" as const, content: attemptPrompt },
+      ];
+
+      // Best-effort token budgeting: prompt estimate + requested completion tokens.
+      const estimatedPromptTokens = estimateTokensForMessages(messages);
+      const estimatedTotalTokens = estimatedPromptTokens + 500;
+      const limiterKey = `openrouter:${clientId}:${resolvedModel}`;
+      const limitResult = consumeRateLimit({
+        key: limiterKey,
+        tokensToConsume: estimatedTotalTokens,
+        maxRequestsPerWindow: maxRequestsPerMinute,
+        maxTokensPerWindow: maxEstimatedTokensPerMinute,
+      });
+
+      if (!limitResult.allowed) {
+        const fallbackMove =
+          legalMoves[Math.floor(Math.random() * legalMoves.length)]!;
+        return NextResponse.json({
+          move: fallbackMove,
+          attemptsUsed: attempt - 1,
+          fallback: true,
+          rateLimited: true,
+          retryAfterMs: limitResult.retryAfterMs,
+          note:
+            limitResult.reason === "tokens"
+              ? "Rate limited to avoid exceeding the configured token budget; server selected a random legal move to keep the game running."
+              : "Rate limited to avoid exceeding the configured request budget; server selected a random legal move to keep the game running.",
+        });
+      }
+
+      const { content } = await openRouterChatCompletion({
+        model: resolvedModel,
+        temperature: 0.1,
+        max_tokens: 500,
+        messages,
+      });
+
+      lastRawResponse = content;
+      const cleaned = cleanContent(content);
+      const move = legalMoveFromResponse(cleaned);
+
+      if (!move) {
+        console.warn(
+          `LLM move parse failed (attempt ${attempt}/${MAX_ATTEMPTS}). Raw:`,
+          cleaned.substring(0, 300)
+        );
+        continue;
+      }
+
+      const serializedMove = JSON.stringify(move);
+      if (!legalMoveSet.has(serializedMove)) {
+        console.warn(
+          `LLM suggested illegal move (attempt ${attempt}/${MAX_ATTEMPTS}). Move:`,
+          serializedMove
+        );
+        continue;
+      }
+
+      return NextResponse.json({ move, attemptsUsed: attempt });
     }
 
-    return NextResponse.json({ move });
+    // Never stop the game: if the model keeps failing, pick a random legal move.
+    const fallbackMove = legalMoves[Math.floor(Math.random() * legalMoves.length)]!;
+    return NextResponse.json({
+      move: fallbackMove,
+      attemptsUsed: MAX_ATTEMPTS,
+      fallback: true,
+      note: "Model failed to provide a valid legal move after retries; server selected a random legal move to keep the game running.",
+    });
   } catch (error) {
     console.warn("LLM move route error", error);
     return NextResponse.json(
-      { error: error instanceof Error ? `Unexpected error: ${error.message}` : "Unexpected error while querying LLM." },
+      { error: error instanceof Error ? `OpenRouter error: ${error.message}` : "Unexpected error while querying OpenRouter." },
       { status: 500 }
     );
   }
