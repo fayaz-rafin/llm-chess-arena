@@ -195,7 +195,7 @@ export const fetchOpenRouterModels = async (): Promise<OpenRouterModelEntry[]> =
   }
 
   const modelsRaw = Array.isArray(data?.data) ? data.data : [];
-  return modelsRaw
+  const models = modelsRaw
     .map((entry: any) => {
       const id = typeof entry?.id === "string" ? entry.id : "";
       if (!id) return null;
@@ -209,6 +209,15 @@ export const fetchOpenRouterModels = async (): Promise<OpenRouterModelEntry[]> =
       return { id, label: name, provider };
     })
     .filter((entry: any): entry is OpenRouterModelEntry => Boolean(entry));
+
+  models.sort((a, b) => {
+    const aKey = (a.label || a.id).toLowerCase();
+    const bKey = (b.label || b.id).toLowerCase();
+    if (aKey !== bKey) return aKey.localeCompare(bKey);
+    return a.id.toLowerCase().localeCompare(b.id.toLowerCase());
+  });
+
+  return models;
 };
 
 export const OPENROUTER_DEFAULT_BASE_URL = OPENROUTER_BASE_URL;

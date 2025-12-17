@@ -1471,6 +1471,13 @@ export default function Home() {
         };
       });
 
+      nextPresets.sort((a, b) => {
+        const aLabel = a.label.toLowerCase();
+        const bLabel = b.label.toLowerCase();
+        if (aLabel !== bLabel) return aLabel.localeCompare(bLabel);
+        return a.model.toLowerCase().localeCompare(b.model.toLowerCase());
+      });
+
       setDynamicPresets(nextPresets);
       setOpenRouterStatus(
         `Loaded ${nextPresets.length} model${nextPresets.length === 1 ? "" : "s"} from OpenRouter.`
@@ -1485,6 +1492,12 @@ export default function Home() {
       setIsLoadingOpenRouterModels(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (dynamicPresets.length > 0) return;
+    if (isLoadingOpenRouterModels) return;
+    void loadOpenRouterModels();
+  }, [dynamicPresets.length, isLoadingOpenRouterModels, loadOpenRouterModels]);
 
   useEffect(() => {
     setWhitePresetId((current) => {
