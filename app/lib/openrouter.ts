@@ -195,7 +195,7 @@ export const fetchOpenRouterModels = async (): Promise<OpenRouterModelEntry[]> =
   }
 
   const modelsRaw = Array.isArray(data?.data) ? data.data : [];
-  const models = modelsRaw
+  const models: OpenRouterModelEntry[] = modelsRaw
     .map((entry: any) => {
       const id = typeof entry?.id === "string" ? entry.id : "";
       if (!id) return null;
@@ -208,9 +208,11 @@ export const fetchOpenRouterModels = async (): Promise<OpenRouterModelEntry[]> =
       const provider = typeof id === "string" && id.includes("/") ? id.split("/")[0] : null;
       return { id, label: name, provider };
     })
-    .filter((entry: any): entry is OpenRouterModelEntry => Boolean(entry));
+    .filter((entry: OpenRouterModelEntry | null): entry is OpenRouterModelEntry =>
+      Boolean(entry)
+    );
 
-  models.sort((a, b) => {
+  models.sort((a: OpenRouterModelEntry, b: OpenRouterModelEntry) => {
     const aKey = (a.label || a.id).toLowerCase();
     const bKey = (b.label || b.id).toLowerCase();
     if (aKey !== bKey) return aKey.localeCompare(bKey);

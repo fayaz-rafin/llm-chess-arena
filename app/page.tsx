@@ -678,7 +678,6 @@ export default function Home() {
   });
   const [moveDelay, setMoveDelay] = useState(MOVE_DELAY_MS);
   const [dynamicPresets, setDynamicPresets] = useState<ModelPreset[]>([]);
-  const [openRouterStatus, setOpenRouterStatus] = useState<string | null>(null);
   const [isLoadingOpenRouterModels, setIsLoadingOpenRouterModels] =
     useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1432,7 +1431,6 @@ export default function Home() {
 
   const loadOpenRouterModels = useCallback(async () => {
     setIsLoadingOpenRouterModels(true);
-    setOpenRouterStatus("Fetching models from OpenRouter...");
 
     try {
       const response = await fetch("/api/litellm/models", {
@@ -1453,7 +1451,7 @@ export default function Home() {
       } = await response.json();
 
       if (!response.ok) {
-        setOpenRouterStatus(
+        console.warn(
           payload.error || `OpenRouter request failed (${response.status}).`
         );
         return;
@@ -1479,15 +1477,8 @@ export default function Home() {
       });
 
       setDynamicPresets(nextPresets);
-      setOpenRouterStatus(
-        `Loaded ${nextPresets.length} model${nextPresets.length === 1 ? "" : "s"} from OpenRouter.`
-      );
     } catch (error) {
-      setOpenRouterStatus(
-        error instanceof Error
-          ? `Failed to fetch from OpenRouter: ${error.message}`
-          : "Failed to fetch from OpenRouter."
-      );
+      console.warn("Failed to fetch OpenRouter models", error);
     } finally {
       setIsLoadingOpenRouterModels(false);
     }
@@ -1525,26 +1516,6 @@ export default function Home() {
       )}
 
       <div className="mt-4 space-y-3">
-        <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs uppercase tracking-wide text-white/50">OpenRouter</p>
-            <button
-              onClick={loadOpenRouterModels}
-              className="rounded-md bg-white/10 px-3 py-2 text-sm transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isLoadingOpenRouterModels}
-            >
-              {isLoadingOpenRouterModels ? "Loading models..." : "Load model list"}
-            </button>
-          </div>
-          {openRouterStatus && (
-            <p className="mt-2 text-[11px] text-white/60">{openRouterStatus}</p>
-          )}
-          <p className="mt-2 text-[11px] text-white/40">
-            This arena calls OpenRouter from the server using{" "}
-            <code className="rounded bg-white/10 px-1">OPENROUTER_API_KEY</code>.
-          </p>
-        </div>
-
         <div>
           <p className="text-xs uppercase tracking-wide text-white/50">Battle Controls</p>
           <div className="mt-2 flex flex-wrap gap-2 text-sm">
@@ -1653,11 +1624,6 @@ export default function Home() {
         </div>
       </div>
 
-      <p className="mt-4 text-[11px] text-white/40">
-        No API keys are stored in your browser. This arena calls OpenRouter from
-        the server using{" "}
-        <code className="rounded bg-white/10 px-1">OPENROUTER_API_KEY</code>.
-      </p>
     </>
   );
 
