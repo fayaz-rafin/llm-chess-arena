@@ -414,7 +414,11 @@ class ChessGame {
         [-1, 1].forEach((dc) => {
           if (this.isValid(row + direction, col + dc)) {
             const target = this.board[row + direction][col + dc];
-            if (target && target.color !== piece.color) {
+            if (
+              target &&
+              target.color !== piece.color &&
+              target.type !== "king"
+            ) {
               moves.push([row + direction, col + dc]);
             }
           }
@@ -437,7 +441,15 @@ class ChessGame {
           const newCol = col + dc;
           if (this.isValid(newRow, newCol)) {
             const target = this.board[newRow][newCol];
-            if (!target || target.color !== piece.color) {
+            if (!target) {
+              moves.push([newRow, newCol]);
+              return;
+            }
+
+            if (
+              target.color !== piece.color &&
+              target.type !== "king"
+            ) {
               moves.push([newRow, newCol]);
             }
           }
@@ -488,7 +500,15 @@ class ChessGame {
           const newCol = col + dc;
           if (this.isValid(newRow, newCol)) {
             const target = this.board[newRow][newCol];
-            if (!target || target.color !== piece.color) {
+            if (!target) {
+              moves.push([newRow, newCol]);
+              return;
+            }
+
+            if (
+              target.color !== piece.color &&
+              target.type !== "king"
+            ) {
               moves.push([newRow, newCol]);
             }
           }
@@ -521,7 +541,9 @@ class ChessGame {
           moves.push([newRow, newCol]);
         } else {
           if (target.color !== piece.color) {
-            moves.push([newRow, newCol]);
+            if (target.type !== "king") {
+              moves.push([newRow, newCol]);
+            }
           }
           break;
         }
@@ -543,6 +565,27 @@ class ChessGame {
     const captured = this.board[toRow][toCol];
     const capturedCopy = captured ? { ...captured } : null;
 
+    // In chess, you cannot capture the king. Treat any such move as a terminal
+    // state (checkmate-like) without removing the king from the board.
+    if (capturedCopy?.type === "king") {
+      const squareName = getSquareName(toRow, toCol);
+      const colorLabel = piece.color === "white" ? "White" : "Black";
+      const notation = `${PIECE_LABEL[piece.type]} ${squareName} #`;
+
+      this.moves.push(`${colorLabel} ${notation}`);
+      this.gameOver = true;
+      this.winner = piece.color;
+
+      return {
+        color: piece.color,
+        piece: movingPiece,
+        from: [fromRow, fromCol],
+        to: [toRow, toCol],
+        captured: null,
+        notation,
+      };
+    }
+
     this.board[toRow][toCol] = piece;
     this.board[fromRow][fromCol] = null;
 
@@ -563,12 +606,6 @@ class ChessGame {
       captured: capturedCopy,
       notation,
     };
-
-    if (capturedCopy?.type === "king") {
-      this.gameOver = true;
-      this.winner = piece.color;
-      return summary;
-    }
 
     this.turn = this.turn === "white" ? "black" : "white";
     return summary;
@@ -677,6 +714,7 @@ export default function Home() {
     model: DEFAULT_PRESET.model,
   });
   const [moveDelay, setMoveDelay] = useState(MOVE_DELAY_MS);
+  const [moveDelayInput, setMoveDelayInput] = useState(String(MOVE_DELAY_MS));
   const [dynamicPresets, setDynamicPresets] = useState<ModelPreset[]>([]);
   const [isLoadingOpenRouterModels, setIsLoadingOpenRouterModels] =
     useState(false);
@@ -707,6 +745,10 @@ export default function Home() {
       document.body.style.overflow = "";
     };
   }, [isDrawerOpen]);
+
+  useEffect(() => {
+    setMoveDelayInput(String(moveDelay));
+  }, [moveDelay]);
 
   useEffect(() => {
     if (!isDrawerOpen) return;
@@ -1384,6 +1426,35 @@ export default function Home() {
     updateFromGame(game);
   };
 
+  const handleRandomMatchup = useCallback(() => {
+    if (isPlayingRef.current) return;
+
+    const eligiblePresets = allPresets.filter(
+      (preset) => preset.id !== CUSTOM_PRESET_ID && preset.model.trim().length > 0
+    );
+    if (eligiblePresets.length === 0) return;
+
+    const pickRandomPreset = () =>
+      eligiblePresets[Math.floor(Math.random() * eligiblePresets.length)]!;
+
+    const whitePreset = pickRandomPreset();
+    let blackPreset = pickRandomPreset();
+
+    if (eligiblePresets.length > 1) {
+      let safety = 0;
+      while (blackPreset.id === whitePreset.id && safety < 10) {
+        blackPreset = pickRandomPreset();
+        safety += 1;
+      }
+    }
+
+    setWhitePresetId(whitePreset.id);
+    setBlackPresetId(blackPreset.id);
+    setWhiteConfig((prev) => ({ ...prev, model: whitePreset.model }));
+    setBlackConfig((prev) => ({ ...prev, model: blackPreset.model }));
+    setError(null);
+  }, [allPresets]);
+
   const handleConfigChange = (
     color: PieceColor,
     field: keyof LlmConfig,
@@ -1527,6 +1598,7 @@ export default function Home() {
                 !whiteConfig.model.trim() ||
                 !blackConfig.model.trim()
               }
+              aria-label="Start battle"
             >
               Start Battle
             </button>
@@ -1534,14 +1606,24 @@ export default function Home() {
               onClick={handlePause}
               className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20"
               disabled={!isPlaying}
+              aria-label="Pause battle"
             >
               Pause
             </button>
             <button
               onClick={handleReset}
               className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20"
+              aria-label="Reset game"
             >
               Reset
+            </button>
+            <button
+              onClick={handleRandomMatchup}
+              className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={isPlaying}
+              aria-label="Pick a random matchup"
+            >
+              Random
             </button>
           </div>
         </div>
@@ -1553,14 +1635,22 @@ export default function Home() {
               type="number"
               min={250}
               step={250}
-              value={moveDelay}
+              value={moveDelayInput}
               onChange={(event) => {
-                const value = Number(event.target.value);
-                if (Number.isNaN(value)) {
+                setMoveDelayInput(event.target.value);
+              }}
+              onBlur={() => {
+                const raw = moveDelayInput.trim();
+                const parsed = Number(raw);
+                if (!raw || Number.isNaN(parsed)) {
                   setMoveDelay(MOVE_DELAY_MS);
                   return;
                 }
-                setMoveDelay(Math.max(250, value));
+                setMoveDelay(Math.max(250, Math.floor(parsed)));
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.currentTarget.blur();
               }}
               className="ml-2 w-20 rounded bg-white/10 px-2 py-1 text-right text-white placeholder-white/40 focus:outline-none"
             />
