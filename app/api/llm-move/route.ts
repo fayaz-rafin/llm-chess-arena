@@ -355,7 +355,12 @@ CRITICAL: Choose ONE move ONLY from the provided legalMoves list. Output must be
   } catch (error) {
     console.warn("LLM move route error", error);
     return NextResponse.json(
-      { error: error instanceof Error ? `OpenRouter error: ${error.message}` : "Unexpected error while querying OpenRouter." },
+      {
+        error:
+          error instanceof Error
+            ? `OpenRouter error: ${error.message}`
+            : "Unexpected error while querying OpenRouter.",
+      },
       { status: 500 }
     );
   }
