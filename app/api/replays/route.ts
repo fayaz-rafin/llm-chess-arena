@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/app/lib/prisma";
 
 type ReplayPayload = {
@@ -49,6 +48,15 @@ export async function POST(request: NextRequest) {
   }
 
   const id = randomUUID();
+  const replayJsonPayload = JSON.parse(
+    JSON.stringify({
+      meta,
+      endedAt,
+      winner,
+      turns,
+      events,
+    })
+  );
 
   try {
     await prisma.replay.create({
@@ -62,13 +70,7 @@ export async function POST(request: NextRequest) {
         whiteModel: meta.whiteModel,
         blackModel: meta.blackModel,
         replayText,
-        replayJson: {
-          meta,
-          endedAt,
-          winner,
-          turns,
-          events,
-        } as Prisma.InputJsonValue,
+        replayJson: replayJsonPayload,
       },
     });
   } catch (error) {
