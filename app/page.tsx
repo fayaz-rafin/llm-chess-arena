@@ -1,6 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
+import { useRouter } from "next/navigation";
 import * as THREE from "three";
 
 let persistedCameraAngle = 0;
@@ -297,6 +306,10 @@ type Move = {
 type MoveResponse = {
   move?: Move | null;
   message?: string;
+  attemptsUsed?: number;
+  fallback?: boolean;
+  rateLimited?: boolean;
+  note?: string;
 };
 
 type MoveSummary = {
@@ -308,6 +321,88 @@ type MoveSummary = {
   notation: string;
 };
 
+type ReplayMeta = {
+  clientMatchId: string;
+  startedAt: string;
+  whiteModel: string;
+  blackModel: string;
+};
+
+type ReplayEvent =
+  | {
+      t: "match_start";
+      at: string;
+      clientMatchId: string;
+      whiteModel: string;
+      blackModel: string;
+    }
+  | {
+      t: "turn_request";
+      at: string;
+      ply: number;
+      turn: PieceColor;
+      model: string;
+      legalMovesCount: number;
+      boardAscii: string;
+    }
+  | {
+      t: "llm_decision";
+      at: string;
+      ply: number;
+      move: Move;
+      attemptsUsed?: number;
+      fallback?: boolean;
+      rateLimited?: boolean;
+      note?: string;
+    }
+  | {
+      t: "move";
+      at: string;
+      ply: number;
+      color: PieceColor;
+      notation: string;
+      from: [number, number];
+      to: [number, number];
+    }
+  | {
+      t: "capture";
+      at: string;
+      ply: number;
+      color: PieceColor;
+      piece: PieceType;
+      value: number;
+    }
+  | {
+      t: "game_over";
+      at: string;
+      winner: PieceColor;
+      reason: string;
+    };
+
+type ReplayJson = {
+  meta: ReplayMeta;
+  endedAt: string;
+  winner: PieceColor;
+  turns: number;
+  events: ReplayEvent[];
+};
+
+type ReplaySummary = {
+  id: string;
+  clientMatchId: string;
+  startedAt: string;
+  endedAt: string;
+  winner: PieceColor;
+  turns: number;
+  whiteModel: string;
+  blackModel: string;
+};
+
+type ReplayDetail = ReplaySummary & {
+  replayText: string;
+  replayJson: ReplayJson;
+};
+
 const PIECE_LABEL: Record<PieceType, string> = {
   pawn: "Pawn",
   rook: "Rook",
@@ -315,6 +410,112 @@ const PIECE_LABEL: Record<PieceType, string> = {
   bishop: "Bishop",
   queen: "Queen",
   king: "King",
+};
+
+const PIECE_VALUE: Record<PieceType, number> = {
+  pawn: 1,
+  knight: 3,
+  bishop: 3,
+  rook: 5,
+  queen: 9,
+  king: 0,
+};
+
+const boardToAscii = (board: BoardState) =>
+  board
+    .map((row) =>
+      row
+        .map((square) => {
+          if (!square) return ".";
+          const symbol = square.type.charAt(0).toLowerCase();
+          return square.color === "white" ? symbol.toUpperCase() : symbol;
+        })
+        .join(" ")
+    )
+    .join("\n");
+
+const formatReplayText = (
+  events: ReplayEvent[],
+  meta: ReplayMeta,
+  endedAt: string,
+  winner: PieceColor,
+  turns: number
+) => {
+  const lines: string[] = [];
+  lines.push("LLM Chess Arena Replay");
+  lines.push(`Start: ${meta.startedAt}`);
+  lines.push(`End: ${endedAt}`);
+  lines.push(`White: ${meta.whiteModel}`);
+  lines.push(`Black: ${meta.blackModel}`);
+  lines.push(`Winner: ${winner}`);
+  lines.push(`Total moves: ${turns}`);
+  lines.push("");
+
+  events.forEach((event) => {
+    switch (event.t) {
+      case "match_start":
+        lines.push(
+          `Match start (${event.at}) | id=${event.clientMatchId} | White=${event.whiteModel} | Black=${event.blackModel}`
+        );
+        break;
+      case "turn_request":
+        lines.push(
+          `Ply ${event.ply}: ${event.turn} to move | model=${event.model} | legalMoves=${event.legalMovesCount}`
+        );
+        lines.push(event.boardAscii);
+        break;
+      case "llm_decision": {
+        const fromSquare = getSquareName(event.move.from[0], event.move.from[1]);
+        const toSquare = getSquareName(event.move.to[0], event.move.to[1]);
+        const flags = [
+          event.fallback ? "fallback" : null,
+          event.rateLimited ? "rate_limited" : null,
+        ]
+          .filter(Boolean)
+          .join(", ");
+        lines.push(
+          `Decision (ply ${event.ply}): ${fromSquare} -> ${toSquare}` +
+            (event.attemptsUsed ? ` | attempts=${event.attemptsUsed}` : "") +
+            (flags ? ` | ${flags}` : "") +
+            (event.note ? ` | note=${event.note}` : "")
+        );
+        break;
+      }
+      case "move": {
+        const fromSquare = getSquareName(event.from[0], event.from[1]);
+        const toSquare = getSquareName(event.to[0], event.to[1]);
+        lines.push(
+          `Move (ply ${event.ply}): ${event.color} ${event.notation} (${fromSquare} -> ${toSquare})`
+        );
+        break;
+      }
+      case "capture":
+        lines.push(
+          `Capture (ply ${event.ply}): ${event.color} captured ${PIECE_LABEL[event.piece]} (value ${event.value})`
+        );
+        break;
+      case "game_over":
+        lines.push(`Game Over: ${event.winner} wins (${event.reason})`);
+        break;
+      default:
+        break;
+    }
+  });
+
+  return lines.join("\n");
+};
+
+const readJson = async <T,>(response: Response): Promise<T> => {
+  const text = await response.text();
+  if (!text) return {} as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const preview = text.trim().slice(0, 120);
+    throw new Error(
+      `Unexpected response (${response.status}): ${preview || "non-JSON"}`
+    );
+  }
 };
 
 const PIECE_IMAGE_MAP: Record<PieceColor, Record<PieceType, string>> = {
@@ -646,6 +847,133 @@ type ModelPreset = {
   model: string;
 };
 
+const comparePresetsAlphabetically = (a: ModelPreset, b: ModelPreset): number => {
+  if (a.id === CUSTOM_PRESET_ID) return 1;
+  if (b.id === CUSTOM_PRESET_ID) return -1;
+  const byLabel = a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
+  if (byLabel !== 0) return byLabel;
+  return a.model.toLowerCase().localeCompare(b.model.toLowerCase());
+};
+
+const sortPresetsAlphabetically = (presets: ModelPreset[]): ModelPreset[] =>
+  [...presets].sort(comparePresetsAlphabetically);
+
+const OPENROUTER_CREDITS_URL = "https://openrouter.ai/settings/credits";
+
+const isOpenRouterCreditsError = (message: string) =>
+  /insufficient credits|never purchased credits|purchase more credits/i.test(message);
+
+const presetMatchesModelSearch = (preset: ModelPreset, rawQuery: string): boolean => {
+  const q = rawQuery.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = `${preset.label} ${preset.model}`.toLowerCase();
+  const tokens = q.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+  return tokens.every((token) => haystack.includes(token));
+};
+
+type ModelSideControlsProps = {
+  title: string;
+  searchAriaLabel: string;
+  selectAriaLabel: string;
+  allPresets: ModelPreset[];
+  selectedPresetId: string;
+  onSelectPresetId: (presetId: string) => void;
+  modelValue: string;
+  onModelValueChange: (value: string) => void;
+  isCustom: boolean;
+  disabled: boolean;
+};
+
+const ModelSideControls = memo(function ModelSideControls({
+  title,
+  searchAriaLabel,
+  selectAriaLabel,
+  allPresets,
+  selectedPresetId,
+  onSelectPresetId,
+  modelValue,
+  onModelValueChange,
+  isCustom,
+  disabled,
+}: ModelSideControlsProps) {
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredPresets = useMemo(() => {
+    const alwaysShowIds = new Set<string>([CUSTOM_PRESET_ID, selectedPresetId]);
+    const matched = allPresets.filter(
+      (preset) =>
+        presetMatchesModelSearch(preset, searchQuery) || alwaysShowIds.has(preset.id)
+    );
+    return sortPresetsAlphabetically(matched);
+  }, [allPresets, searchQuery, selectedPresetId]);
+
+  const handleSearchChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(event.target.value);
+  }, []);
+
+  const handleSelectChange = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      onSelectPresetId(event.target.value);
+    },
+    [onSelectPresetId]
+  );
+
+  const handleModelInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      onModelValueChange(event.target.value);
+    },
+    [onModelValueChange]
+  );
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs uppercase tracking-wide text-white/50">{title}</p>
+      <label className="block text-[11px] uppercase tracking-wide text-white/45">
+        Search models
+        <input
+          type="search"
+          value={searchQuery}
+          onChange={handleSearchChange}
+          placeholder="e.g. OpenAI, claude, gemini"
+          autoComplete="off"
+          disabled={disabled}
+          aria-label={searchAriaLabel}
+          className="mt-1 w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-sm text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+        />
+      </label>
+      <p className="text-[11px] text-white/40">
+        Showing {filteredPresets.length} of {allPresets.length}. Spaces = multiple terms.
+      </p>
+      <select
+        value={selectedPresetId}
+        onChange={handleSelectChange}
+        className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white focus:outline-none"
+        aria-label={selectAriaLabel}
+      >
+        {filteredPresets.map((preset) => (
+          <option key={preset.id} value={preset.id}>
+            {preset.label}
+          </option>
+        ))}
+      </select>
+      <input
+        type="text"
+        placeholder="OpenRouter model id (e.g. openai/gpt-4o)"
+        value={modelValue}
+        onChange={handleModelInputChange}
+        disabled={!isCustom}
+        className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+      />
+      <p className="text-[11px] text-white/40">
+        {isCustom
+          ? "Set a custom OpenRouter model id for this side."
+          : "Preset locks the model id. Choose Custom to edit manually."}
+      </p>
+    </div>
+  );
+});
+
 const MODEL_PRESETS: ReadonlyArray<ModelPreset> = [
   {
     id: "openrouter-openai-gpt-4o",
@@ -658,9 +986,9 @@ const MODEL_PRESETS: ReadonlyArray<ModelPreset> = [
     model: "openai/gpt-5",
   },
   {
-    id: "openrouter-anthropic-claude-3.5-sonnet",
-    label: "OpenRouter · Anthropic / Claude 3.5 Sonnet",
-    model: "anthropic/claude-3.5-sonnet",
+    id: "openrouter-anthropic-claude-sonnet-4.5",
+    label: "OpenRouter · Anthropic / Claude Sonnet 4.5",
+    model: "anthropic/claude-sonnet-4.5",
   },
   {
     id: "openrouter-google-gemini-2.5-flash",
@@ -686,6 +1014,7 @@ type LlmConfig = {
 };
 
 export default function Home() {
+  const router = useRouter();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -698,6 +1027,15 @@ export default function Home() {
   const sceneReadyRef = useRef(false);
   const moveListRef = useRef<HTMLDivElement | null>(null);
   const turnInProgressRef = useRef(false);
+  const replayEventsRef = useRef<ReplayEvent[]>([]);
+  const replayMetaRef = useRef<ReplayMeta | null>(null);
+  const replayTurnRef = useRef(0);
+  const replaySavedRef = useRef(false);
+  const replayIndexRef = useRef(0);
+  const replayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const replayMovesRef = useRef<Move[]>([]);
+  const isReplayModeRef = useRef(false);
+  const isReplayPlayingRef = useRef(false);
 
   const [status, setStatus] = useState("Initializing arena...");
   const [isPlaying, setIsPlaying] = useState(false);
@@ -722,6 +1060,12 @@ export default function Home() {
   const [isControlsOpen, setIsControlsOpen] = useState(false);
   const [isLogOpen, setIsLogOpen] = useState(false);
   const isDrawerOpen = isControlsOpen || isLogOpen;
+  const [isReplayMode, setIsReplayMode] = useState(false);
+  const [isReplayPlaying, setIsReplayPlaying] = useState(false);
+  const [replayMoves, setReplayMoves] = useState<Move[]>([]);
+  const [replayDetail, setReplayDetail] = useState<ReplayDetail | null>(null);
+  const [replayError, setReplayError] = useState<string | null>(null);
+  const [activeReplayId, setActiveReplayId] = useState<string | null>(null);
 
   const closeDrawers = useCallback(() => {
     setIsControlsOpen(false);
@@ -737,6 +1081,119 @@ export default function Home() {
     setIsLogOpen(true);
     setIsControlsOpen(false);
   }, []);
+
+  const nowIso = useCallback(() => new Date().toISOString(), []);
+
+  const appendReplayEvent = useCallback((event: ReplayEvent) => {
+    replayEventsRef.current.push(event);
+  }, []);
+
+  const resetReplayLog = useCallback((clearMeta: boolean) => {
+    replayEventsRef.current = [];
+    replayTurnRef.current = 0;
+    replaySavedRef.current = false;
+    if (clearMeta) {
+      replayMetaRef.current = null;
+    }
+  }, []);
+
+  const startReplayLog = useCallback(() => {
+    const whiteModel = whiteConfig.model.trim();
+    const blackModel = blackConfig.model.trim();
+    const clientMatchId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `match_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const startedAt = nowIso();
+
+    resetReplayLog(true);
+    const meta: ReplayMeta = {
+      clientMatchId,
+      startedAt,
+      whiteModel,
+      blackModel,
+    };
+    replayMetaRef.current = meta;
+    appendReplayEvent({
+      t: "match_start",
+      at: startedAt,
+      clientMatchId,
+      whiteModel,
+      blackModel,
+    });
+  }, [
+    appendReplayEvent,
+    blackConfig.model,
+    nowIso,
+    resetReplayLog,
+    whiteConfig.model,
+  ]);
+
+  const saveReplay = useCallback(
+    async (game: ChessGame, reason: string) => {
+      if (replaySavedRef.current) return;
+      const meta = replayMetaRef.current;
+      if (!meta || !game.winner) return;
+
+      const endedAt = nowIso();
+      appendReplayEvent({
+        t: "game_over",
+        at: endedAt,
+        winner: game.winner,
+        reason,
+      });
+
+      const payload = {
+        meta,
+        endedAt,
+        winner: game.winner,
+        turns: game.moves.length,
+        events: replayEventsRef.current,
+        replayText: formatReplayText(
+          replayEventsRef.current,
+          meta,
+          endedAt,
+          game.winner,
+          game.moves.length
+        ),
+      };
+
+      replaySavedRef.current = true;
+
+      try {
+        const response = await fetch("/api/replays", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          console.warn("Replay save failed", data?.error || response.status);
+          replaySavedRef.current = false;
+        }
+      } catch (error) {
+        console.warn("Replay save error", error);
+        replaySavedRef.current = false;
+      }
+    },
+    [appendReplayEvent, nowIso]
+  );
+
+  const stopReplayTimer = useCallback(() => {
+    if (replayTimerRef.current) {
+      clearTimeout(replayTimerRef.current);
+      replayTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    replayMovesRef.current = replayMoves;
+  }, [replayMoves]);
+
+  
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -791,7 +1248,7 @@ export default function Home() {
       }
     });
 
-    return merged;
+    return sortPresetsAlphabetically(merged);
   }, [dynamicPresets]);
 
   const updateFromGame = useCallback((game: ChessGame) => {
@@ -1079,6 +1536,78 @@ export default function Home() {
     }
   }, [clearPieces, createPieceMesh]);
 
+  const resetBoard = useCallback(() => {
+    if (!sceneReadyRef.current) return;
+    const game = new ChessGame();
+    gameRef.current = game;
+    initPieces(game);
+    setMoveHistory([]);
+    setCapturedByWhite([]);
+    setCapturedByBlack([]);
+    updateFromGame(game);
+  }, [initPieces, updateFromGame]);
+
+  const loadReplay = useCallback(
+    async (id: string) => {
+      if (!id) return;
+      setReplayError(null);
+      stopReplayTimer();
+      setIsReplayPlaying(false);
+      isReplayPlayingRef.current = false;
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+      turnInProgressRef.current = false;
+      replayIndexRef.current = 0;
+
+      try {
+        const response = await fetch(`/api/replays/${id}`);
+        const payload = await readJson<{
+          replay?: ReplayDetail;
+          error?: string;
+        }>(response);
+
+        if (!response.ok || !payload.replay) {
+          throw new Error(payload.error || "Replay not found");
+        }
+
+        const replay = payload.replay;
+        const events = replay.replayJson?.events ?? [];
+        const moves = events
+          .filter((event) => event.t === "move")
+          .map((event) => ({
+            from: event.from,
+            to: event.to,
+          }));
+
+        setReplayDetail(replay);
+        setReplayMoves(moves);
+        setIsReplayMode(true);
+        setActiveReplayId(replay.id);
+        resetBoard();
+        setStatus("Replay loaded. Ready to play.");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to load replay";
+        setReplayError(message);
+        setStatus("Failed to load replay");
+      }
+    },
+    [resetBoard, setStatus, stopReplayTimer]
+  );
+
+  const exitReplay = useCallback(() => {
+    stopReplayTimer();
+    setIsReplayPlaying(false);
+    setIsReplayMode(false);
+    setReplayDetail(null);
+    setReplayMoves([]);
+    setReplayError(null);
+    setActiveReplayId(null);
+    replayIndexRef.current = 0;
+    resetBoard();
+    setStatus("Ready for a new battle.");
+    router.push("/");
+  }, [resetBoard, router, stopReplayTimer]);
+
   const movePieceInScene = useCallback(
     (fromRow: number, fromCol: number, toRow: number, toCol: number) => {
       const scene = sceneRef.current;
@@ -1109,6 +1638,52 @@ export default function Home() {
     []
   );
 
+  const playNextReplayMove = useCallback(() => {
+    const game = gameRef.current;
+    if (!game || !isReplayModeRef.current || !isReplayPlayingRef.current) {
+      return;
+    }
+
+    const moves = replayMovesRef.current;
+    const nextIndex = replayIndexRef.current;
+
+    if (nextIndex >= moves.length) {
+      setIsReplayPlaying(false);
+      setStatus("Replay finished.");
+      return;
+    }
+
+    const move = moves[nextIndex];
+    replayIndexRef.current = nextIndex + 1;
+
+    const [fromRow, fromCol] = move.from;
+    const [toRow, toCol] = move.to;
+    movePieceInScene(fromRow, fromCol, toRow, toCol);
+    const summary = game.makeMove(fromRow, fromCol, toRow, toCol);
+    if (summary) {
+      setMoveHistory((prev) => [...prev, summary]);
+      if (summary.captured) {
+        const capturedPiece = summary.captured;
+        if (summary.color === "white") {
+          setCapturedByWhite((prev) => [...prev, capturedPiece]);
+        } else {
+          setCapturedByBlack((prev) => [...prev, capturedPiece]);
+        }
+      }
+    }
+
+    updateFromGame(game);
+
+    if (game.gameOver || replayIndexRef.current >= moves.length) {
+      setIsReplayPlaying(false);
+      isReplayPlayingRef.current = false;
+      setStatus("Replay finished.");
+      return;
+    }
+
+    replayTimerRef.current = setTimeout(playNextReplayMove, moveDelay);
+  }, [moveDelay, movePieceInScene, updateFromGame]);
+
   const fetchLlmMove = useCallback(
     async (
       turn: PieceColor,
@@ -1116,7 +1691,7 @@ export default function Home() {
       board: BoardState,
       history: string[],
       config: LlmConfig
-    ): Promise<Move> => {
+    ): Promise<{ move: Move; meta: MoveResponse }> => {
       const payload = {
         turn,
         legalMoves,
@@ -1153,7 +1728,7 @@ export default function Home() {
         throw new Error("LLM returned an illegal move");
       }
 
-      return data.move;
+      return { move: data.move, meta: data };
     },
     []
   );
@@ -1182,15 +1757,31 @@ export default function Home() {
         setStatus(`${winnerLabel} wins by stalemate!`);
         setIsPlaying(false);
         isPlayingRef.current = false;
+        void saveReplay(game, "stalemate");
         return;
       }
 
       const config = game.turn === "white" ? whiteConfig : blackConfig;
       setStatus(`Consulting ${game.turn} LLM (${config.model})...`);
 
-      let move: Move;
+      const ply = replayTurnRef.current + 1;
+      replayTurnRef.current = ply;
+
+      if (replayMetaRef.current) {
+        appendReplayEvent({
+          t: "turn_request",
+          at: nowIso(),
+          ply,
+          turn: game.turn,
+          model: config.model,
+          legalMovesCount: legalMoves.length,
+          boardAscii: boardToAscii(game.serializeBoard()),
+        });
+      }
+
+      let decision: { move: Move; meta: MoveResponse };
       try {
-        move = await fetchLlmMove(
+        decision = await fetchLlmMove(
           game.turn,
           legalMoves,
           game.serializeBoard(),
@@ -1206,6 +1797,20 @@ export default function Home() {
         return;
       }
 
+      if (replayMetaRef.current) {
+        appendReplayEvent({
+          t: "llm_decision",
+          at: nowIso(),
+          ply,
+          move: decision.move,
+          attemptsUsed: decision.meta.attemptsUsed,
+          fallback: decision.meta.fallback,
+          rateLimited: decision.meta.rateLimited,
+          note: decision.meta.note,
+        });
+      }
+
+      const move = decision.move;
       const [fromRow, fromCol] = move.from;
       const [toRow, toCol] = move.to;
       movePieceInScene(fromRow, fromCol, toRow, toCol);
@@ -1221,6 +1826,27 @@ export default function Home() {
           }
         }
       }
+      if (summary && replayMetaRef.current) {
+        appendReplayEvent({
+          t: "move",
+          at: nowIso(),
+          ply,
+          color: summary.color,
+          notation: summary.notation,
+          from: summary.from,
+          to: summary.to,
+        });
+        if (summary.captured) {
+          appendReplayEvent({
+            t: "capture",
+            at: nowIso(),
+            ply,
+            color: summary.color,
+            piece: summary.captured.type,
+            value: PIECE_VALUE[summary.captured.type],
+          });
+        }
+      }
       updateFromGame(game);
 
       if (!game.gameOver && isPlayingRef.current) {
@@ -1231,11 +1857,22 @@ export default function Home() {
       } else if (game.gameOver) {
         setIsPlaying(false);
         isPlayingRef.current = false;
+        void saveReplay(game, "checkmate");
       }
     } finally {
       turnInProgressRef.current = false;
     }
-  }, [blackConfig, fetchLlmMove, moveDelay, movePieceInScene, updateFromGame, whiteConfig]);
+  }, [
+    appendReplayEvent,
+    blackConfig,
+    fetchLlmMove,
+    moveDelay,
+    movePieceInScene,
+    nowIso,
+    saveReplay,
+    updateFromGame,
+    whiteConfig,
+  ]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1324,6 +1961,7 @@ export default function Home() {
     setMoveHistory([]);
     setCapturedByWhite([]);
     setCapturedByBlack([]);
+    resetReplayLog(true);
     sceneReadyRef.current = true;
 
     return () => {
@@ -1333,6 +1971,11 @@ export default function Home() {
       if (scheduleNextTurn.current) {
         clearTimeout(scheduleNextTurn.current);
       }
+      if (replayTimerRef.current) {
+        clearTimeout(replayTimerRef.current);
+        replayTimerRef.current = null;
+      }
+      isReplayPlayingRef.current = false;
 
       if (requestRef.current) {
         cancelAnimationFrame(requestRef.current);
@@ -1355,7 +1998,7 @@ export default function Home() {
       cameraRef.current = null;
       rendererRef.current = null;
     };
-  }, [clearPieces, initPieces, updateFromGame]);
+  }, [clearPieces, initPieces, resetReplayLog, updateFromGame]);
 
   useEffect(() => {
     if (!isPlaying) {
@@ -1378,6 +2021,15 @@ export default function Home() {
   const handleStart = () => {
     if (!sceneReadyRef.current || isPlayingRef.current) return;
 
+    if (isReplayMode) {
+      if (isReplayPlaying) return;
+      setReplayError(null);
+      setIsReplayPlaying(true);
+      isReplayPlayingRef.current = true;
+      playNextReplayMove();
+      return;
+    }
+
     // Validate models
     const whiteModel = whiteConfig.model.trim();
     const blackModel = blackConfig.model.trim();
@@ -1395,12 +2047,22 @@ export default function Home() {
     }
 
     setError(null);
+    const game = gameRef.current;
+    if (!replayMetaRef.current && game && game.moves.length === 0) {
+      startReplayLog();
+    }
     isPlayingRef.current = true;
     setIsPlaying(true);
     playNextTurn();
   };
 
   const handlePause = () => {
+    if (isReplayMode) {
+      setIsReplayPlaying(false);
+      isReplayPlayingRef.current = false;
+      stopReplayTimer();
+      return;
+    }
     isPlayingRef.current = false;
     setIsPlaying(false);
     if (scheduleNextTurn.current) {
@@ -1414,16 +2076,26 @@ export default function Home() {
     setIsPlaying(false);
     turnInProgressRef.current = false;
     setError(null);
+    setReplayError(null);
+
+    if (isReplayMode) {
+      setIsReplayPlaying(false);
+      isReplayPlayingRef.current = false;
+      replayIndexRef.current = 0;
+      stopReplayTimer();
+      if (!sceneReadyRef.current) return;
+      resetBoard();
+      setStatus("Replay reset.");
+      return;
+    }
+
+    resetReplayLog(true);
+    setIsReplayPlaying(false);
+    replayIndexRef.current = 0;
+    stopReplayTimer();
 
     if (!sceneReadyRef.current) return;
-
-    const game = new ChessGame();
-    gameRef.current = game;
-    initPieces(game);
-    setMoveHistory([]);
-    setCapturedByWhite([]);
-    setCapturedByBlack([]);
-    updateFromGame(game);
+    resetBoard();
   };
 
   const handleRandomMatchup = useCallback(() => {
@@ -1504,12 +2176,9 @@ export default function Home() {
     setIsLoadingOpenRouterModels(true);
 
     try {
-      const response = await fetch("/api/litellm/models", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
+      const response = await fetch("/api/openrouter/models", {
+        method: "GET",
+        cache: "no-store",
       });
 
       const payload: {
@@ -1529,7 +2198,15 @@ export default function Home() {
       }
 
       const models = payload.models ?? [];
-      const nextPresets: ModelPreset[] = models.map((model) => {
+      const sorted = [...models].sort((a, b) => {
+        const aLabel = [a.provider, a.label || a.id].filter(Boolean).join(" · ");
+        const bLabel = [b.provider, b.label || b.id].filter(Boolean).join(" · ");
+        const byLabel = aLabel.localeCompare(bLabel, undefined, { sensitivity: "base" });
+        if (byLabel !== 0) return byLabel;
+        return a.id.toLowerCase().localeCompare(b.id.toLowerCase());
+      });
+
+      const nextPresets: ModelPreset[] = sorted.map((model) => {
         const prettyLabel = [model.provider, model.label || model.id]
           .filter(Boolean)
           .join(" · ");
@@ -1540,13 +2217,6 @@ export default function Home() {
         };
       });
 
-      nextPresets.sort((a, b) => {
-        const aLabel = a.label.toLowerCase();
-        const bLabel = b.label.toLowerCase();
-        if (aLabel !== bLabel) return aLabel.localeCompare(bLabel);
-        return a.model.toLowerCase().localeCompare(b.model.toLowerCase());
-      });
-
       setDynamicPresets(nextPresets);
     } catch (error) {
       console.warn("Failed to fetch OpenRouter models", error);
@@ -1555,11 +2225,31 @@ export default function Home() {
     }
   }, []);
 
+  const handleRefreshOpenRouterModels = useCallback(() => {
+    void loadOpenRouterModels();
+  }, [loadOpenRouterModels]);
+
   useEffect(() => {
     if (dynamicPresets.length > 0) return;
     if (isLoadingOpenRouterModels) return;
     void loadOpenRouterModels();
   }, [dynamicPresets.length, isLoadingOpenRouterModels, loadOpenRouterModels]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const replayId = new URLSearchParams(window.location.search).get("replay");
+    if (!replayId) return;
+    if (replayId === activeReplayId) return;
+    void loadReplay(replayId);
+  }, [activeReplayId, loadReplay]);
+
+  useEffect(() => {
+    isReplayModeRef.current = isReplayMode;
+  }, [isReplayMode]);
+
+  useEffect(() => {
+    isReplayPlayingRef.current = isReplayPlaying;
+  }, [isReplayPlaying]);
 
   useEffect(() => {
     setWhitePresetId((current) => {
@@ -1579,10 +2269,48 @@ export default function Home() {
   const ControlPanelContent = () => (
     <>
       <h1 className="text-2xl font-semibold">♟️ LLM Chess Arena ♟️</h1>
-      <p className="mt-2 text-teal-300">{status}</p>
+      <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+        <p className="text-teal-300">{status}</p>
+        <a
+          href="/replays"
+          className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:text-white"
+        >
+          Replays
+        </a>
+      </div>
       {error && (
         <div className="mt-2 rounded-md border border-red-500/50 bg-red-500/20 p-2 text-xs text-red-300">
-          {error}
+          <p className="whitespace-pre-wrap">{error}</p>
+          {isOpenRouterCreditsError(error) && (
+            <p className="mt-2 border-t border-red-500/40 pt-2 text-[11px] text-red-200/95">
+              This comes from your OpenRouter account (API usage is billed there). Add credits or confirm
+              your key matches the right account:{" "}
+              <a
+                href={OPENROUTER_CREDITS_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-teal-200 underline decoration-teal-400/70 underline-offset-2 hover:text-teal-100"
+              >
+                openrouter.ai/settings/credits
+              </a>
+            </p>
+          )}
+        </div>
+      )}
+      {replayError && (
+        <div className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/20 p-2 text-xs text-amber-200">
+          {replayError}
+        </div>
+      )}
+      {isReplayMode && replayDetail && (
+        <div className="mt-2 rounded-md border border-white/10 bg-white/5 p-2 text-xs text-white/70">
+          <div className="font-semibold text-white/90">Replay mode</div>
+          <div className="mt-1">
+            {replayDetail.whiteModel} vs {replayDetail.blackModel}
+          </div>
+          <div className="mt-1">
+            Winner: {replayDetail.winner} · Moves: {replayDetail.turns}
+          </div>
         </div>
       )}
 
@@ -1594,33 +2322,44 @@ export default function Home() {
               onClick={handleStart}
               className="rounded-md bg-teal-400 px-3 py-2 font-semibold text-slate-900 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-500"
               disabled={
-                isPlaying ||
-                !whiteConfig.model.trim() ||
-                !blackConfig.model.trim()
+                isReplayMode
+                  ? isReplayPlaying || replayMoves.length === 0
+                  : isPlaying ||
+                    !whiteConfig.model.trim() ||
+                    !blackConfig.model.trim()
               }
               aria-label="Start battle"
             >
-              Start Battle
+              {isReplayMode ? "Play Replay" : "Start Battle"}
             </button>
             <button
               onClick={handlePause}
               className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20"
-              disabled={!isPlaying}
+              disabled={isReplayMode ? !isReplayPlaying : !isPlaying}
               aria-label="Pause battle"
             >
-              Pause
+              {isReplayMode ? "Pause Replay" : "Pause"}
             </button>
             <button
               onClick={handleReset}
               className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20"
               aria-label="Reset game"
             >
-              Reset
+              {isReplayMode ? "Reset Replay" : "Reset"}
             </button>
+            {isReplayMode && (
+              <button
+                onClick={exitReplay}
+                className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20"
+                aria-label="Exit replay"
+              >
+                Exit Replay
+              </button>
+            )}
             <button
               onClick={handleRandomMatchup}
               className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isPlaying}
+              disabled={isPlaying || isReplayMode}
               aria-label="Pick a random matchup"
             >
               Random
@@ -1657,61 +2396,46 @@ export default function Home() {
           </label>
         </div>
 
-        <div className="space-y-3">
-          <p className="text-xs uppercase tracking-wide text-white/50">White LLM</p>
-          <select
-            value={whitePresetId}
-            onChange={(event) => handlePresetChange("white", event.target.value)}
-            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white focus:outline-none"
-          >
-            {allPresets.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-          <input
-            type="text"
-            placeholder="OpenRouter model id (e.g. openai/gpt-4o)"
-            value={whiteConfig.model}
-            onChange={(event) => handleConfigChange("white", "model", event.target.value)}
-            disabled={!whiteIsCustom}
-            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-          />
-          <p className="text-[11px] text-white/40">
-            {whiteIsCustom
-              ? "Set a custom OpenRouter model id for this side."
-              : "Preset locks the model id. Choose Custom to edit manually."}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs uppercase tracking-wide text-white/50">
+            OpenRouter catalog
           </p>
+          <button
+            type="button"
+            onClick={handleRefreshOpenRouterModels}
+            disabled={isLoadingOpenRouterModels || isPlaying || isReplayMode}
+            className="rounded-md border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] text-white/80 transition hover:border-white/30 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="Refresh OpenRouter model list from the API"
+          >
+            {isLoadingOpenRouterModels ? "Refreshing…" : "Refresh models"}
+          </button>
         </div>
 
-        <div className="space-y-3">
-          <p className="text-xs uppercase tracking-wide text-white/50">Black LLM</p>
-          <select
-            value={blackPresetId}
-            onChange={(event) => handlePresetChange("black", event.target.value)}
-            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white focus:outline-none"
-          >
-            {allPresets.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-          <input
-            type="text"
-            placeholder="OpenRouter model id (e.g. openai/gpt-4o)"
-            value={blackConfig.model}
-            onChange={(event) => handleConfigChange("black", "model", event.target.value)}
-            disabled={!blackIsCustom}
-            className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-          />
-          <p className="text-[11px] text-white/40">
-            {blackIsCustom
-              ? "Set a custom OpenRouter model id for this side."
-              : "Preset locks the model id. Choose Custom to edit manually."}
-          </p>
-        </div>
+        <ModelSideControls
+          title="White LLM"
+          searchAriaLabel="Filter white model list by label or model id"
+          selectAriaLabel="Model preset for white pieces"
+          allPresets={allPresets}
+          selectedPresetId={whitePresetId}
+          onSelectPresetId={(presetId) => handlePresetChange("white", presetId)}
+          modelValue={whiteConfig.model}
+          onModelValueChange={(value) => handleConfigChange("white", "model", value)}
+          isCustom={whiteIsCustom}
+          disabled={isPlaying || isReplayMode}
+        />
+
+        <ModelSideControls
+          title="Black LLM"
+          searchAriaLabel="Filter black model list by label or model id"
+          selectAriaLabel="Model preset for black pieces"
+          allPresets={allPresets}
+          selectedPresetId={blackPresetId}
+          onSelectPresetId={(presetId) => handlePresetChange("black", presetId)}
+          modelValue={blackConfig.model}
+          onModelValueChange={(value) => handleConfigChange("black", "model", value)}
+          isCustom={blackIsCustom}
+          disabled={isPlaying || isReplayMode}
+        />
       </div>
 
     </>
@@ -1830,6 +2554,7 @@ export default function Home() {
       <div className="pointer-events-none absolute top-4 left-1/2 z-20 w-[90vw] max-w-sm -translate-x-1/2 rounded-full border border-white/10 bg-black/60 px-4 py-2 text-center text-xs text-white md:hidden">
         {status}
       </div>
+
 
       {isDrawerOpen && (
         <div

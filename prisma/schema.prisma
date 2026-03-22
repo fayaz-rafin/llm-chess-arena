@@ -1,0 +1,23 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Replay {
+  id            String   @id @db.Uuid
+  clientMatchId String   @map("client_match_id")
+  startedAt     DateTime @map("started_at") @db.Timestamptz(6)
+  endedAt       DateTime @map("ended_at") @db.Timestamptz(6)
+  winner        String
+  turns         Int
+  whiteModel    String   @map("white_model")
+  blackModel    String   @map("black_model")
+  replayText    String   @map("replay_text")
+  replayJson    Json     @map("replay_json")
+
+  @@map("replays")
+}

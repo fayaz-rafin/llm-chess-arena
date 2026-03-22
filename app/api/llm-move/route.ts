@@ -18,6 +18,15 @@ type Piece = {
 
 type BoardState = (Piece | null)[][];
 
+const PIECE_TO_SYMBOL: Record<string, string> = {
+  pawn: "p",
+  knight: "n",
+  bishop: "b",
+  rook: "r",
+  queen: "q",
+  king: "k",
+};
+
 const legalMoveFromResponse = (text: string): Move | null => {
   if (!text || typeof text !== "string") return null;
 
@@ -164,16 +173,20 @@ const legalMoveFromResponse = (text: string): Move | null => {
 
 const boardToAscii = (board: BoardState) =>
   board
-    .map((row) =>
-      row
+    .map((row, rowIndex) => {
+      const rendered = row
         .map((square) => {
           if (!square) return ".";
-          const symbol = square.type.charAt(0).toLowerCase();
-          return square.color === "white" ? symbol.toUpperCase() : symbol;
+          const base = PIECE_TO_SYMBOL[square.type] ?? square.type.charAt(0).toLowerCase();
+          return square.color === "white" ? base.toUpperCase() : base;
         })
-        .join(" ")
-    )
+        .join(" ");
+      return `${rowIndex} ${rendered}`;
+    })
     .join("\n");
+
+const formatLegalMove = (move: Move) =>
+  `[${move.from[0]},${move.from[1]}]->[${move.to[0]},${move.to[1]}]`;
 
 export async function POST(request: NextRequest) {
   let payload: {
@@ -217,7 +230,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const systemPrompt = `You are a precise chess engine. You must choose exactly one legal move for ${turn}. 
+  const systemPrompt = `You are a precise chess engine. You must choose exactly one legal move for ${turn}.
 
 CRITICAL RULES:
 1. Respond with ONLY a JSON object - nothing else
@@ -229,17 +242,19 @@ CRITICAL RULES:
 
 Example of correct response: {"from":[6,4],"to":[4,4]}`;
 
-  // Limit move history to last 10 moves to keep prompt shorter
-  const recentHistory = (history ?? []).slice(-10);
-  
-  const userPrompt = `Board (0=Black back, 7=White back):
-${boardToAscii(board)}
+  // Limit move history to keep prompt shorter.
+  const recentHistory = (history ?? []).slice(-4);
+  const legalMovesCompact = legalMoves.map(formatLegalMove).join(" ");
 
-Legal moves: ${JSON.stringify(legalMoves)}
+  const userPrompt = `Board (rows 0-7 top to bottom, cols 0-7 left to right):
+${boardToAscii(board)}
+  0 1 2 3 4 5 6 7
+
+Legal moves (MUST pick exactly one): ${legalMovesCompact}
 
 Recent moves: ${recentHistory.join(" | ")}
 
-Playing as ${turn}. Return ONLY: {"from":[r,c],"to":[r,c]}`;
+Playing as ${turn}. Return ONLY JSON: {"from":[r,c],"to":[r,c]}`;
 
   try {
     const MAX_ATTEMPTS = 5;
@@ -288,7 +303,7 @@ CRITICAL: Choose ONE move ONLY from the provided legalMoves list. Output must be
 
       // Best-effort token budgeting: prompt estimate + requested completion tokens.
       const estimatedPromptTokens = estimateTokensForMessages(messages);
-      const estimatedTotalTokens = estimatedPromptTokens + 500;
+      const estimatedTotalTokens = estimatedPromptTokens + 64;
       const limiterKey = `openrouter:${clientId}:${resolvedModel}`;
       const limitResult = consumeRateLimit({
         key: limiterKey,
@@ -315,8 +330,8 @@ CRITICAL: Choose ONE move ONLY from the provided legalMoves list. Output must be
 
       const { content } = await openRouterChatCompletion({
         model: resolvedModel,
-        temperature: 0.1,
-        max_tokens: 500,
+        temperature: 0,
+        max_tokens: 64,
         messages,
       });
 

@@ -9,22 +9,25 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@vercel/analytics": "^1.5.0",
+    "@prisma/client": "^6.19.2",
+    "@vercel/analytics": "^1.6.1",
     "next": "16.0.10",
+    "prisma": "^6.19.2",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "three": "^0.181.0"
+    "three": "^0.181.2"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
+    "@tailwindcss/postcss": "^4.2.2",
+    "@types/node": "^20.19.37",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@types/three": "^0.181.0",
-    "eslint": "^9",
+    "baseline-browser-mapping": "^2.10.10",
+    "eslint": "^9.39.4",
     "eslint-config-next": "16.0.10",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "tailwindcss": "^4.2.2",
+    "typescript": "^5.9.3"
   },
-  "packageManager": "pnpm@10.26.0+sha512.3b3f6c725ebe712506c0ab1ad4133cf86b1f4b687effce62a9b38b4d72e3954242e643190fc51fa1642949c735f403debd44f5cb0edd657abe63a8b6a7e1e402"
+  "packageManager": "pnpm@10.32.1+sha512.a706938f0e89ac1456b6563eab4edf1d1faf3368d1191fc5c59790e96dc918e4456ab2e67d613de1043d2e8c81f87303e6b40d4ffeca9df15ef1ad567348f2be"
 }

@@ -17,6 +17,8 @@ export type OpenRouterModelEntry = {
   id: string;
   label?: string;
   provider?: string | null;
+  /** Unix seconds from OpenRouter; used to surface newest models first */
+  created?: number;
 };
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -167,7 +169,8 @@ export const openRouterChatCompletion = async (
 
 export const fetchOpenRouterModels = async (): Promise<OpenRouterModelEntry[]> => {
   const apiKey = getOpenRouterApiKey();
-  const endpoint = `${OPENROUTER_BASE_URL}/models`;
+  const params = new URLSearchParams({ output_modalities: "text" });
+  const endpoint = `${OPENROUTER_BASE_URL}/models?${params.toString()}`;
 
   const response = await fetch(endpoint, {
     method: "GET",
@@ -176,6 +179,7 @@ export const fetchOpenRouterModels = async (): Promise<OpenRouterModelEntry[]> =
       "Content-Type": "application/json",
       ...getOptionalHeaders(),
     },
+    cache: "no-store",
   });
 
   const text = await response.text();
@@ -206,16 +210,21 @@ export const fetchOpenRouterModels = async (): Promise<OpenRouterModelEntry[]> =
             ? entry.description
             : undefined;
       const provider = typeof id === "string" && id.includes("/") ? id.split("/")[0] : null;
-      return { id, label: name, provider };
+      const created =
+        typeof entry?.created === "number" && Number.isFinite(entry.created)
+          ? entry.created
+          : undefined;
+      return { id, label: name, provider, created };
     })
     .filter((entry: OpenRouterModelEntry | null): entry is OpenRouterModelEntry =>
       Boolean(entry)
     );
 
   models.sort((a: OpenRouterModelEntry, b: OpenRouterModelEntry) => {
-    const aKey = (a.label || a.id).toLowerCase();
-    const bKey = (b.label || b.id).toLowerCase();
-    if (aKey !== bKey) return aKey.localeCompare(bKey);
+    const aKey = [a.provider, a.label || a.id].filter(Boolean).join(" · ");
+    const bKey = [b.provider, b.label || b.id].filter(Boolean).join(" · ");
+    const byLabel = aKey.localeCompare(bKey, undefined, { sensitivity: "base" });
+    if (byLabel !== 0) return byLabel;
     return a.id.toLowerCase().localeCompare(b.id.toLowerCase());
   });
 
