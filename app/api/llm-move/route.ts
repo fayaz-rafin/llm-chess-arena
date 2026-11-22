@@ -66,100 +66,35 @@ const isValidBoard = (board: unknown): board is BoardState => {
 const legalMoveFromResponse = (text: string): Move | null => {
   if (!text || typeof text !== "string") return null;
 
-  let cleanedText = text.trim();
-
-  if (cleanedText.startsWith("```json")) {
-    cleanedText = cleanedText.replace(/^```json\s*/, "").replace(/\s*```$/, "");
-  } else if (cleanedText.startsWith("```")) {
-    cleanedText = cleanedText.replace(/^```\s*/, "").replace(/\s*```$/, "");
-  }
-  cleanedText = cleanedText.trim();
-
-  let jsonMatch = cleanedText.match(/\{[^{}]*"from"[^{}]*"to"[^{}]*\}/);
-
-  if (!jsonMatch) {
-    jsonMatch = cleanedText.match(/\{[\s\S]*?\}/);
-  }
-
-  if (!jsonMatch) {
-    const incompleteMatch = cleanedText.match(/\{[^{}]*"from"[^{}]*"to"[^{}]*/);
-    if (incompleteMatch) {
-      let incompleteJson = incompleteMatch[0];
-      if (incompleteJson.includes('"to":[') && !incompleteJson.includes("]}")) {
-        const toMatch = incompleteJson.match(/"to":\[(\d+),?\s*(\d*)/);
-        if (toMatch) {
-          const firstNum = toMatch[1];
-          const secondNum = toMatch[2] || "0";
-          incompleteJson = incompleteJson.replace(
-            /"to":\[(\d+),?\s*(\d*)/,
-            `"to":[${firstNum},${secondNum}]`
-          );
-          incompleteJson += "}";
-          jsonMatch = [incompleteJson];
-        }
-      }
-    }
-  }
-
-  if (!jsonMatch) {
-    console.warn(
-      "No JSON object found in LLM response:",
-      cleanedText.substring(0, 200)
-    );
-    return null;
-  }
-
   try {
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = JSON.parse(text.trim());
 
-    let from: [number, number] | null = null;
-    let to: [number, number] | null = null;
+    if (!Array.isArray(parsed.from) || !Array.isArray(parsed.to)) return null;
 
-    if (Array.isArray(parsed.from) && Array.isArray(parsed.to)) {
-      from = [Number(parsed.from[0]), Number(parsed.from[1])];
-      to = [Number(parsed.to[0]), Number(parsed.to[1])];
-    } else if (
-      parsed.from &&
-      parsed.to &&
-      typeof parsed.from === "object" &&
-      typeof parsed.to === "object"
-    ) {
-      from = [
-        Number(parsed.from.row ?? parsed.from[0]),
-        Number(parsed.from.col ?? parsed.from[1]),
-      ];
-      to = [
-        Number(parsed.to.row ?? parsed.to[0]),
-        Number(parsed.to.col ?? parsed.to[1]),
-      ];
-    } else if (
-      parsed.row !== undefined &&
-      parsed.col !== undefined &&
-      parsed.toRow !== undefined &&
-      parsed.toCol !== undefined
-    ) {
-      from = [Number(parsed.row), Number(parsed.col)];
-      to = [Number(parsed.toRow), Number(parsed.toCol)];
-    }
+    const from: [number, number] = [
+      Number(parsed.from[0]),
+      Number(parsed.from[1]),
+    ];
+    const to: [number, number] = [Number(parsed.to[0]), Number(parsed.to[1])];
 
     if (
-      from &&
-      to &&
-      !isNaN(from[0]) &&
-      !isNaN(from[1]) &&
-      !isNaN(to[0]) &&
-      !isNaN(to[1]) &&
-      from[0] >= 0 &&
-      from[0] < 8 &&
-      from[1] >= 0 &&
-      from[1] < 8 &&
-      to[0] >= 0 &&
-      to[0] < 8 &&
-      to[1] >= 0 &&
-      to[1] < 8
+      isNaN(from[0]) ||
+      isNaN(from[1]) ||
+      isNaN(to[0]) ||
+      isNaN(to[1]) ||
+      from[0] < 0 ||
+      from[0] >= 8 ||
+      from[1] < 0 ||
+      from[1] >= 8 ||
+      to[0] < 0 ||
+      to[0] >= 8 ||
+      to[1] < 0 ||
+      to[1] >= 8
     ) {
-      return { from, to };
+      return null;
     }
+
+    return { from, to };
   } catch (error) {
     console.warn(
       "Failed to parse LLM move response:",
@@ -167,79 +102,8 @@ const legalMoveFromResponse = (text: string): Move | null => {
       "Response:",
       text.substring(0, 200)
     );
+    return null;
   }
-
-  const fromMatch = cleanedText.match(
-    /"from"\s*:\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]/
-  );
-  const toMatch = cleanedText.match(
-    /"to"\s*:\s*\[\s*(\d+)\s*,?\s*(\d*)\s*/
-  );
-
-  if (fromMatch && toMatch) {
-    const fromRow = Number(fromMatch[1]);
-    const fromCol = Number(fromMatch[2]);
-    const toRow = Number(toMatch[1]);
-    const toCol = toMatch[2] ? Number(toMatch[2]) : null;
-
-    if (
-      !isNaN(fromRow) &&
-      !isNaN(fromCol) &&
-      !isNaN(toRow) &&
-      fromRow >= 0 &&
-      fromRow < 8 &&
-      fromCol >= 0 &&
-      fromCol < 8 &&
-      toRow >= 0 &&
-      toRow < 8
-    ) {
-      if (toCol === null || isNaN(toCol)) {
-        const afterToRow = cleanedText.substring(
-          cleanedText.indexOf(toMatch[0]) + toMatch[0].length
-        );
-        const nextNumMatch = afterToRow.match(/(\d+)/);
-        if (nextNumMatch) {
-          const inferredCol = Number(nextNumMatch[1]);
-          if (inferredCol >= 0 && inferredCol < 8) {
-            return {
-              from: [fromRow, fromCol],
-              to: [toRow, inferredCol],
-            };
-          }
-        }
-        console.warn(
-          "Could not extract complete 'to' coordinates from:",
-          cleanedText.substring(0, 200)
-        );
-        return null;
-      }
-
-      if (toCol >= 0 && toCol < 8) {
-        return {
-          from: [fromRow, fromCol],
-          to: [toRow, toCol],
-        };
-      }
-    }
-  }
-
-  const numbers = cleanedText.match(/\d+/g);
-  if (numbers && numbers.length >= 3) {
-    const nums = numbers.map(Number).filter((n) => n >= 0 && n < 8);
-    if (nums.length >= 3) {
-      const inferred = nums.length >= 4 ? nums[3] : 0;
-      return {
-        from: [nums[0], nums[1]],
-        to: [nums[2], inferred],
-      };
-    }
-  }
-
-  console.warn(
-    "Could not extract valid move from LLM response:",
-    cleanedText.substring(0, 200)
-  );
-  return null;
 };
 
 const boardToAscii = (board: BoardState) =>
