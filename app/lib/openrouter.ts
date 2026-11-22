@@ -10,15 +10,12 @@ export type OpenRouterChatCompletionParams = {
   messages: OpenRouterChatMessage[];
   temperature?: number;
   max_tokens?: number;
-  response_format?: { type: "json_object" };
 };
 
 export type OpenRouterModelEntry = {
   id: string;
   label?: string;
   provider?: string | null;
-  /** Unix seconds from OpenRouter; used to surface newest models first */
-  created?: number;
 };
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -61,7 +58,6 @@ export const openRouterChatCompletion = async (
       messages: params.messages,
       temperature: params.temperature ?? 0.1,
       max_tokens: params.max_tokens ?? 500,
-      ...(params.response_format ? { response_format: params.response_format } : {}),
     }),
     signal: AbortSignal.timeout(15_000),
   });
@@ -146,7 +142,7 @@ export const openRouterChatCompletion = async (
 
   const extracted = extractText(data);
   if (extracted.trim()) {
-    return { content: extracted, raw: data as unknown };
+    return { content: extracted };
   }
 
   const choice = data?.choices?.[0];
@@ -212,27 +208,12 @@ export const fetchOpenRouterModels = async (): Promise<OpenRouterModelEntry[]> =
             ? entry.description
             : undefined;
       const provider = typeof id === "string" && id.includes("/") ? id.split("/")[0] : null;
-      const created =
-        typeof entry?.created === "number" && Number.isFinite(entry.created)
-          ? entry.created
-          : undefined;
-      return { id, label: name, provider, created };
+      return { id, label: name, provider };
     })
     .filter((entry: OpenRouterModelEntry | null): entry is OpenRouterModelEntry =>
       Boolean(entry)
     );
 
-  models.sort((a: OpenRouterModelEntry, b: OpenRouterModelEntry) => {
-    const aKey = [a.provider, a.label || a.id].filter(Boolean).join(" · ");
-    const bKey = [b.provider, b.label || b.id].filter(Boolean).join(" · ");
-    const byLabel = aKey.localeCompare(bKey, undefined, { sensitivity: "base" });
-    if (byLabel !== 0) return byLabel;
-    return a.id.toLowerCase().localeCompare(b.id.toLowerCase());
-  });
-
   return models;
 };
-
-export const OPENROUTER_DEFAULT_BASE_URL = OPENROUTER_BASE_URL;
-
 
