@@ -8,6 +8,8 @@ type Bucket = {
   tokens: number;
 };
 
+const MAX_KEYS = 5_000;
+
 const getOrCreateStore = () => {
   const globalAny = globalThis as unknown as {
     __llmChessRateLimitStore?: Map<string, Bucket>;
@@ -26,10 +28,24 @@ const clampInt = (value: unknown, fallback: number) => {
   return Math.max(1, Math.floor(asNumber));
 };
 
+const evictOldestIfNeeded = (store: Map<string, Bucket>) => {
+  while (store.size > MAX_KEYS) {
+    const oldestKey = store.keys().next().value;
+    if (oldestKey === undefined) break;
+    store.delete(oldestKey);
+  }
+};
+
 export const estimateTokensForText = (text: string) => {
-  // Rough heuristic: ~4 chars per token for English-ish text.
-  const chars = typeof text === "string" ? text.length : 0;
-  return Math.max(1, Math.ceil(chars / 4));
+  // ASCII ~4 chars/token; non-ASCII (e.g. CJK) closer to 1 token/char.
+  if (typeof text !== "string" || text.length === 0) return 1;
+  let ascii = 0;
+  let other = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text.charCodeAt(i) < 128) ascii += 1;
+    else other += 1;
+  }
+  return Math.max(1, Math.ceil(ascii / 4) + other);
 };
 
 export const estimateTokensForMessages = (messages: Array<{ content: string }>) =>
@@ -70,7 +86,7 @@ export const consumeRateLimit = (params: {
 
   const existing = store.get(params.key);
   const bucket: Bucket = existing
-    ? existing
+    ? { ...existing }
     : { windowStartMs: now, requests: 0, tokens: 0 };
 
   const elapsed = now - bucket.windowStartMs;
@@ -83,7 +99,12 @@ export const consumeRateLimit = (params: {
   const nextRequests = bucket.requests + 1;
   if (nextRequests > params.maxRequestsPerWindow) {
     const retryAfterMs = Math.max(0, windowMs - (now - bucket.windowStartMs));
-    store.set(params.key, bucket);
+    // Do not create a brand-new bucket on deny; only refresh existing ones.
+    if (existing) {
+      store.delete(params.key);
+      store.set(params.key, existing);
+      evictOldestIfNeeded(store);
+    }
     return { allowed: false, retryAfterMs, reason: "requests" };
   }
 
@@ -91,14 +112,19 @@ export const consumeRateLimit = (params: {
   const nextTokens = bucket.tokens + tokensToConsume;
   if (nextTokens > params.maxTokensPerWindow) {
     const retryAfterMs = Math.max(0, windowMs - (now - bucket.windowStartMs));
-    store.set(params.key, bucket);
+    if (existing) {
+      store.delete(params.key);
+      store.set(params.key, existing);
+      evictOldestIfNeeded(store);
+    }
     return { allowed: false, retryAfterMs, reason: "tokens" };
   }
 
   bucket.requests = nextRequests;
   bucket.tokens = nextTokens;
+  // Re-insert so the key becomes newest in Map insertion order (for LRU eviction).
+  store.delete(params.key);
   store.set(params.key, bucket);
+  evictOldestIfNeeded(store);
   return { allowed: true };
 };
-
-

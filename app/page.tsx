@@ -907,6 +907,17 @@ class ChessGame {
   }
 
   makeMove(fromRow: number, fromCol: number, toRow: number, toCol: number): MoveSummary | null {
+    if (
+      !this.isValid(fromRow, fromCol) ||
+      !this.isValid(toRow, toCol) ||
+      !Number.isInteger(fromRow) ||
+      !Number.isInteger(fromCol) ||
+      !Number.isInteger(toRow) ||
+      !Number.isInteger(toCol)
+    ) {
+      return null;
+    }
+
     const piece = this.board[fromRow][fromCol];
     if (!piece) return null;
 
@@ -984,7 +995,16 @@ const SQUARE_SIZE = 1;
 const BOARD_OFFSET = (BOARD_SIZE - 1) / 2;
 const MOVE_DELAY_MS = 1500;
 
-const CUSTOM_PRESET_ID = "custom";
+const MAX_GAME_PLIES = 2000;
+const REPLAY_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const isBoardCoord = (value: unknown): value is [number, number] =>
+  Array.isArray(value) &&
+  value.length === 2 &&
+  value.every(
+    (n) => typeof n === "number" && Number.isInteger(n) && n >= 0 && n < 8
+  );
 
 const sanitizeId = (value: string) =>
   value.replace(/[^a-zA-Z0-9-_]/g, "_").slice(0, 120);
@@ -996,8 +1016,6 @@ type ModelPreset = {
 };
 
 const comparePresetsAlphabetically = (a: ModelPreset, b: ModelPreset): number => {
-  if (a.id === CUSTOM_PRESET_ID) return 1;
-  if (b.id === CUSTOM_PRESET_ID) return -1;
   const byLabel = a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
   if (byLabel !== 0) return byLabel;
   return a.model.toLowerCase().localeCompare(b.model.toLowerCase());
@@ -1028,8 +1046,6 @@ type ModelSideControlsProps = {
   selectedPresetId: string;
   onSelectPresetId: (presetId: string) => void;
   modelValue: string;
-  onModelValueChange: (value: string) => void;
-  isCustom: boolean;
   disabled: boolean;
 };
 
@@ -1041,14 +1057,12 @@ const ModelSideControls = memo(function ModelSideControls({
   selectedPresetId,
   onSelectPresetId,
   modelValue,
-  onModelValueChange,
-  isCustom,
   disabled,
 }: ModelSideControlsProps) {
   const [searchQuery, setSearchQuery] = useState("");
 
   const filteredPresets = useMemo(() => {
-    const alwaysShowIds = new Set<string>([CUSTOM_PRESET_ID, selectedPresetId]);
+    const alwaysShowIds = new Set<string>([selectedPresetId]);
     const matched = allPresets.filter(
       (preset) =>
         presetMatchesModelSearch(preset, searchQuery) || alwaysShowIds.has(preset.id)
@@ -1065,13 +1079,6 @@ const ModelSideControls = memo(function ModelSideControls({
       onSelectPresetId(event.target.value);
     },
     [onSelectPresetId]
-  );
-
-  const handleModelInputChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      onModelValueChange(event.target.value);
-    },
-    [onModelValueChange]
   );
 
   const isWhiteSide = title.toLowerCase().includes("white");
@@ -1112,17 +1119,7 @@ const ModelSideControls = memo(function ModelSideControls({
             </option>
           ))}
         </select>
-        {isCustom && (
-          <input
-            type="text"
-            placeholder="Model id (e.g. openai/gpt-4o)"
-            value={modelValue}
-            onChange={handleModelInputChange}
-            aria-label={`Custom model id for ${title}`}
-            className="field font-mono text-xs"
-          />
-        )}
-        {!isCustom && modelValue && (
+        {modelValue && (
           <p className="truncate px-1 font-mono text-[11px] text-[var(--ivory-faint)]">
             {modelValue}
           </p>
@@ -1157,11 +1154,6 @@ const MODEL_PRESETS: ReadonlyArray<ModelPreset> = [
     id: "openrouter-google-gemini-2.5-pro",
     label: "OpenRouter · Google / Gemini 2.5 Pro",
     model: "google/gemini-2.5-pro",
-  },
-  {
-    id: CUSTOM_PRESET_ID,
-    label: "Custom model id…",
-    model: "",
   },
 ];
 
@@ -1697,7 +1689,10 @@ export default function Home() {
 
   const loadReplay = useCallback(
     async (id: string) => {
-      if (!id) return;
+      if (!id || !REPLAY_ID_RE.test(id)) {
+        setReplayError("Invalid replay id");
+        return;
+      }
       setReplayError(null);
       stopReplayTimer();
       setIsReplayPlaying(false);
@@ -1708,7 +1703,7 @@ export default function Home() {
       replayIndexRef.current = 0;
 
       try {
-        const response = await fetch(`/api/replays/${id}`);
+        const response = await fetch(`/api/replays/${encodeURIComponent(id)}`);
         const payload = await readJson<{
           replay?: ReplayDetail;
           error?: string;
@@ -1721,7 +1716,10 @@ export default function Home() {
         const replay = payload.replay;
         const events = replay.replayJson?.events ?? [];
         const moves = events
-          .filter((event) => event.t === "move")
+          .filter(
+            (event): event is Extract<ReplayEvent, { t: "move" }> =>
+              event.t === "move" && isBoardCoord(event.from) && isBoardCoord(event.to)
+          )
           .map((event) => ({
             from: event.from,
             to: event.to,
@@ -1975,6 +1973,16 @@ export default function Home() {
     try {
       const game = gameRef.current;
       if (!game || game.gameOver || !isPlayingRef.current) {
+        return;
+      }
+
+      if (game.moves.length >= MAX_GAME_PLIES) {
+        game.gameOver = true;
+        game.winner = game.turn === "white" ? "black" : "white";
+        setStatus(`Draw by move limit (${MAX_GAME_PLIES}).`);
+        setIsPlaying(false);
+        isPlayingRef.current = false;
+        void saveReplay(game, "move_limit");
         return;
       }
 
@@ -2419,7 +2427,7 @@ export default function Home() {
     if (isPlayingRef.current) return;
 
     const eligiblePresets = allPresets.filter(
-      (preset) => preset.id !== CUSTOM_PRESET_ID && preset.model.trim().length > 0
+      (preset) => preset.model.trim().length > 0
     );
     if (eligiblePresets.length === 0) return;
 
@@ -2444,50 +2452,30 @@ export default function Home() {
     setError(null);
   }, [allPresets]);
 
-  const handleConfigChange = (
-    color: PieceColor,
-    field: keyof LlmConfig,
-    value: string
-  ) => {
-    if (color === "white") {
-      setWhiteConfig((prev) => ({ ...prev, [field]: value }));
-      setWhitePresetId(CUSTOM_PRESET_ID);
-    } else {
-      setBlackConfig((prev) => ({ ...prev, [field]: value }));
-      setBlackPresetId(CUSTOM_PRESET_ID);
-    }
-    // Clear error when user updates configuration
-    setError(null);
-  };
-
   const handlePresetChange = useCallback(
     (color: PieceColor, presetId: string) => {
       const preset = allPresets.find((entry) => entry.id === presetId);
-      const resolvedId = preset ? preset.id : CUSTOM_PRESET_ID;
+      if (!preset) return;
 
       if (color === "white") {
-        setWhitePresetId(resolvedId);
-        if (preset && preset.id !== CUSTOM_PRESET_ID) {
-          setWhiteConfig((prev) => ({
-            ...prev,
-            model: preset.model,
-          }));
-        }
+        setWhitePresetId(preset.id);
+        setWhiteConfig((prev) => ({
+          ...prev,
+          model: preset.model,
+        }));
       } else {
-        setBlackPresetId(resolvedId);
-        if (preset && preset.id !== CUSTOM_PRESET_ID) {
-          setBlackConfig((prev) => ({
-            ...prev,
-            model: preset.model,
-          }));
-        }
+        setBlackPresetId(preset.id);
+        setBlackConfig((prev) => ({
+          ...prev,
+          model: preset.model,
+        }));
       }
+      setError(null);
     },
     [allPresets]
   );
 
-  const whiteIsCustom = whitePresetId === CUSTOM_PRESET_ID;
-  const blackIsCustom = blackPresetId === CUSTOM_PRESET_ID;
+  const modelsFetchAttemptedRef = useRef(false);
 
   const loadOpenRouterModels = useCallback(async () => {
     setIsLoadingOpenRouterModels(true);
@@ -2495,7 +2483,6 @@ export default function Home() {
     try {
       const response = await fetch("/api/openrouter/models", {
         method: "GET",
-        cache: "no-store",
       });
 
       const payload: {
@@ -2543,19 +2530,22 @@ export default function Home() {
   }, []);
 
   const handleRefreshOpenRouterModels = useCallback(() => {
+    modelsFetchAttemptedRef.current = true;
     void loadOpenRouterModels();
   }, [loadOpenRouterModels]);
 
   useEffect(() => {
+    if (modelsFetchAttemptedRef.current) return;
     if (dynamicPresets.length > 0) return;
     if (isLoadingOpenRouterModels) return;
+    modelsFetchAttemptedRef.current = true;
     void loadOpenRouterModels();
   }, [dynamicPresets.length, isLoadingOpenRouterModels, loadOpenRouterModels]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     const replayId = new URLSearchParams(window.location.search).get("replay");
-    if (!replayId) return;
+    if (!replayId || !REPLAY_ID_RE.test(replayId)) return;
     if (replayId === activeReplayId) return;
     void loadReplay(replayId);
   }, [activeReplayId, loadReplay]);
@@ -2569,18 +2559,13 @@ export default function Home() {
   }, [isReplayPlaying]);
 
   useEffect(() => {
-    setWhitePresetId((current) => {
-      if (current === CUSTOM_PRESET_ID) return current;
-      return allPresets.some((preset) => preset.id === current)
-        ? current
-        : CUSTOM_PRESET_ID;
-    });
-    setBlackPresetId((current) => {
-      if (current === CUSTOM_PRESET_ID) return current;
-      return allPresets.some((preset) => preset.id === current)
-        ? current
-        : CUSTOM_PRESET_ID;
-    });
+    const fallbackId = DEFAULT_PRESET.id;
+    setWhitePresetId((current) =>
+      allPresets.some((preset) => preset.id === current) ? current : fallbackId
+    );
+    setBlackPresetId((current) =>
+      allPresets.some((preset) => preset.id === current) ? current : fallbackId
+    );
   }, [allPresets]);
 
   const isLive = isReplayMode ? isReplayPlaying : isPlaying;
@@ -2726,8 +2711,6 @@ export default function Home() {
             selectedPresetId={whitePresetId}
             onSelectPresetId={(presetId) => handlePresetChange("white", presetId)}
             modelValue={whiteConfig.model}
-            onModelValueChange={(value) => handleConfigChange("white", "model", value)}
-            isCustom={whiteIsCustom}
             disabled={isPlaying || isReplayMode}
           />
 
@@ -2739,8 +2722,6 @@ export default function Home() {
             selectedPresetId={blackPresetId}
             onSelectPresetId={(presetId) => handlePresetChange("black", presetId)}
             modelValue={blackConfig.model}
-            onModelValueChange={(value) => handleConfigChange("black", "model", value)}
-            isCustom={blackIsCustom}
             disabled={isPlaying || isReplayMode}
           />
         </div>

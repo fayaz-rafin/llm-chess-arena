@@ -63,6 +63,7 @@ export const openRouterChatCompletion = async (
       max_tokens: params.max_tokens ?? 500,
       ...(params.response_format ? { response_format: params.response_format } : {}),
     }),
+    signal: AbortSignal.timeout(15_000),
   });
 
   const text = await response.text();
@@ -180,6 +181,7 @@ export const fetchOpenRouterModels = async (): Promise<OpenRouterModelEntry[]> =
       ...getOptionalHeaders(),
     },
     cache: "no-store",
+    signal: AbortSignal.timeout(15_000),
   });
 
   const text = await response.text();
