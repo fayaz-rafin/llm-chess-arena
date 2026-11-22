@@ -11,18 +11,98 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import * as THREE from "three";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 let persistedCameraAngle = 0;
+
+// --- Scene Animation ---
+type SceneTween = {
+  object: THREE.Object3D;
+  delay: number;
+  duration: number;
+  elapsed: number;
+  /** Receives raw progress 0..1; easing is applied inside the closure. */
+  update: (progress: number) => void;
+  onComplete?: () => void;
+};
+
+const easeInOutCubic = (t: number) =>
+  t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+const easeOutQuart = (t: number) => 1 - Math.pow(1 - t, 4);
+
+const setPieceOpacity = (object: THREE.Object3D, opacity: number) => {
+  object.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      const materials = Array.isArray(child.material)
+        ? child.material
+        : [child.material];
+      materials.forEach((material) => {
+        material.transparent = true;
+        material.opacity = opacity;
+      });
+    }
+  });
+};
 
 // --- Geometry Generators ---
 const GEOMETRY_CACHE: Record<string, THREE.BufferGeometry> = {};
 
+// Subdivide the lathe profile with Catmull-Rom so long curves render silky
+// smooth, while short segments (rings, collars, rims) keep their crisp edges.
+const smoothProfile = (points: [number, number][]) => {
+  const result: [number, number][] = [];
+
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const [r0, y0] = points[i];
+    const [r1, y1] = points[i + 1];
+    result.push([r0, y0]);
+
+    const segmentLength = Math.hypot(r1 - r0, y1 - y0);
+    if (segmentLength < 0.09) continue;
+
+    const prev = points[Math.max(0, i - 1)];
+    const next = points[Math.min(points.length - 1, i + 2)];
+    const curve = new THREE.CatmullRomCurve3(
+      [
+        new THREE.Vector3(prev[0], prev[1], 0),
+        new THREE.Vector3(r0, y0, 0),
+        new THREE.Vector3(r1, y1, 0),
+        new THREE.Vector3(next[0], next[1], 0),
+      ],
+      false,
+      "catmullrom",
+      0.2
+    );
+
+    // Never let smoothing invent vertical gaps between profile points —
+    // that is what made heads/battlements look like they were floating.
+    const yMin = Math.min(y0, y1);
+    const yMax = Math.max(y0, y1);
+    const subdivisions = Math.min(6, Math.ceil(segmentLength / 0.05));
+    for (let step = 1; step < subdivisions; step += 1) {
+      const t = 1 / 3 + (step / subdivisions) * (1 / 3);
+      const sample = curve.getPoint(t);
+      result.push([
+        Math.max(0, sample.x),
+        THREE.MathUtils.clamp(sample.y, yMin, yMax),
+      ]);
+    }
+  }
+
+  result.push(points[points.length - 1]);
+  return result;
+};
+
 const getLatheGeometry = (points: [number, number][]) => {
-  const key = JSON.stringify(points);
+  const key = `v2:${JSON.stringify(points)}`;
   if (GEOMETRY_CACHE[key]) return GEOMETRY_CACHE[key];
 
-  const vectorPoints = points.map(([r, y]) => new THREE.Vector2(r, y));
-  const geometry = new THREE.LatheGeometry(vectorPoints, 32);
+  const vectorPoints = smoothProfile(points).map(
+    ([r, y]) => new THREE.Vector2(r, y)
+  );
+  const geometry = new THREE.LatheGeometry(vectorPoints, 96);
   geometry.computeVertexNormals();
   GEOMETRY_CACHE[key] = geometry;
   return geometry;
@@ -47,14 +127,16 @@ const getPawnGeometry = () =>
   getLatheGeometry(
     withBase(
       [
-        [0.20, 0], // Stem bottom
-        [0.15, 0.3], // Stem mid
-        [0.12, 0.45], // Neck
-        [0.18, 0.46], // Collar bottom
-        [0.18, 0.49], // Collar top
-        [0.10, 0.50], // Neck top
-        [0.22, 0.65], // Head equator
-        [0, 0.80],    // Head top
+        [0.20, 0],
+        [0.16, 0.28],
+        [0.13, 0.42],
+        [0.17, 0.46], // Collar
+        [0.17, 0.50],
+        [0.13, 0.52], // Continuous neck into ball — no thin gap
+        [0.20, 0.62],
+        [0.22, 0.70],
+        [0.16, 0.78],
+        [0, 0.82],
       ],
       0.15
     )
@@ -92,34 +174,36 @@ const getRookGeometry = () =>
 
 const getBishopGeometry = () =>
   getLatheGeometry([
-    // Base (Smooth tiered style)
+    // Tiered Staunton base
     [0.34, 0],
-    [0.34, 0.04],
-    [0.30, 0.07], 
-    [0.32, 0.10], 
-    [0.32, 0.14],
-    [0.26, 0.18], // Smooth curve in
+    [0.34, 0.045],
+    [0.30, 0.075],
+    [0.32, 0.11],
+    [0.32, 0.155],
+    [0.27, 0.19],
 
-    // Stem (Elongated concave curve)
-    [0.20, 0.25],
-    [0.15, 0.45], // Waist
-    [0.18, 0.62], // Widen gently
+    // Concave stem — narrow waist, flares into collar
+    [0.19, 0.28],
+    [0.14, 0.46],
+    [0.16, 0.58],
 
-    // Collar (Disc)
-    [0.24, 0.64], // Flare under collar
-    [0.26, 0.66], // Collar outer rim
-    [0.26, 0.69], // Collar thickness
-    [0.20, 0.70], // Collar top in
+    // Double collar ring (small ring + wide disc)
+    [0.20, 0.605],
+    [0.24, 0.625],
+    [0.24, 0.655],
+    [0.19, 0.665],
+    [0.235, 0.685],
+    [0.235, 0.715],
+    [0.175, 0.725],
 
-    // Head (Miter - rounded egg shape)
-    [0.20, 0.70], 
-    [0.25, 0.80], // Bulge
-    [0.22, 0.95], // Taper
-    [0.10, 1.05], // Top narrow
-
-    // Finial
-    [0.08, 1.07],
-    [0, 1.10],
+    // Bulbous mitre head — elongated egg
+    [0.175, 0.74],
+    [0.22, 0.82],
+    [0.245, 0.92],
+    [0.22, 1.02],
+    [0.14, 1.08],
+    [0.06, 1.10],
+    [0, 1.105],
   ]);
 
 const getQueenGeometry = () =>
@@ -192,103 +276,167 @@ const getKingGeometry = () =>
   ]);
 
 const getKnightHeadGeometry = () => {
-  if (GEOMETRY_CACHE["knight-head"]) return GEOMETRY_CACHE["knight-head"];
+  if (GEOMETRY_CACHE["knight-head-v7"]) return GEOMETRY_CACHE["knight-head-v7"];
 
-  const shape = new THREE.Shape();
-  
-  // Stylized Knight profile based on reference (segmented mane, vents, blocky snout)
-  
-  // Start at bottom back
-  shape.moveTo(-0.2, -0.1);
-  
-  // Mane (Back of neck) with "teeth" segments
-  const teethCount = 8;
-  let tx = -0.22;
-  let ty = -0.05;
-  
-  // Curve up and forward
-  for (let i = 0; i < teethCount; i++) {
-    const progress = i / teethCount;
-    // Curve the spine forward as we go up
-    const nextTx = -0.2 + Math.sin(progress * 1.2) * 0.15; 
-    const nextTy = ty + 0.12;
-    
-    // Tooth outward (back/up)
-    shape.lineTo(tx - 0.08, ty + 0.04);
-    // Tooth inward (next base)
-    shape.lineTo(nextTx, nextTy);
-    
-    tx = nextTx;
-    ty = nextTy;
+  // One solid mesh: pedestal + neck + head. No separate floating parts.
+  const parts: THREE.BufferGeometry[] = [];
+
+  // Pedestal base (flared + double collar)
+  const pedestal = new THREE.LatheGeometry(
+    [
+      new THREE.Vector2(0.34, 0),
+      new THREE.Vector2(0.34, 0.05),
+      new THREE.Vector2(0.30, 0.08),
+      new THREE.Vector2(0.32, 0.12),
+      new THREE.Vector2(0.32, 0.15),
+      new THREE.Vector2(0.26, 0.19),
+      new THREE.Vector2(0.22, 0.22),
+      new THREE.Vector2(0.24, 0.245),
+      new THREE.Vector2(0.24, 0.27),
+      new THREE.Vector2(0.20, 0.285),
+      new THREE.Vector2(0.23, 0.31),
+      new THREE.Vector2(0.23, 0.335),
+      new THREE.Vector2(0.18, 0.35),
+    ],
+    48
+  );
+  parts.push(pedestal);
+
+  // Round neck — overlaps the pedestal collar so there is no seam gap
+  const neck = new THREE.LatheGeometry(
+    [
+      new THREE.Vector2(0.17, 0.30),
+      new THREE.Vector2(0.165, 0.38),
+      new THREE.Vector2(0.15, 0.48),
+      new THREE.Vector2(0.145, 0.56),
+      new THREE.Vector2(0.155, 0.62),
+    ],
+    48
+  );
+  parts.push(neck);
+
+  // Main skull
+  const skull = new THREE.SphereGeometry(0.155, 40, 32);
+  skull.scale(1.15, 1.05, 1.0);
+  skull.translate(0.05, 0.70, 0);
+  parts.push(skull);
+
+  // Cheek / jaw
+  const jaw = new THREE.SphereGeometry(0.1, 28, 22);
+  jaw.scale(1.35, 0.75, 1.05);
+  jaw.translate(0.12, 0.61, 0);
+  parts.push(jaw);
+
+  // Muzzle
+  const muzzle = new THREE.CylinderGeometry(0.048, 0.085, 0.2, 28);
+  muzzle.rotateZ(-Math.PI / 2);
+  muzzle.translate(0.24, 0.65, 0);
+  parts.push(muzzle);
+
+  // Nose tip
+  const nose = new THREE.SphereGeometry(0.055, 24, 20);
+  nose.scale(1.15, 0.85, 0.9);
+  nose.translate(0.35, 0.65, 0);
+  parts.push(nose);
+
+  // Chin
+  const chin = new THREE.SphereGeometry(0.04, 16, 14);
+  chin.scale(1.4, 0.7, 0.95);
+  chin.translate(0.28, 0.59, 0);
+  parts.push(chin);
+
+  // Brow — subtle, not a horn ridge
+  const brow = new THREE.SphereGeometry(0.055, 18, 14);
+  brow.scale(1.2, 0.4, 1.1);
+  brow.translate(0.1, 0.78, 0);
+  parts.push(brow);
+
+  // Short rounded ears seated into the skull (cones read as horns)
+  ([-1, 1] as const).forEach((side) => {
+    const ear = new THREE.SphereGeometry(0.038, 14, 12);
+    ear.scale(0.55, 1.15, 0.45);
+    ear.translate(0.02, 0.82, side * 0.07);
+    ear.rotateZ(-0.55);
+    ear.rotateX(side * 0.35);
+    parts.push(ear);
+  });
+
+  // Mane ridge
+  const maneCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.1, 0.34, 0),
+    new THREE.Vector3(-0.15, 0.44, 0),
+    new THREE.Vector3(-0.16, 0.55, 0),
+    new THREE.Vector3(-0.13, 0.66, 0),
+    new THREE.Vector3(-0.07, 0.76, 0),
+    new THREE.Vector3(-0.02, 0.80, 0),
+  ]);
+  const maneTube = new THREE.TubeGeometry(maneCurve, 40, 0.055, 16, false);
+  const manePos = maneTube.attributes.position;
+  for (let i = 0; i < manePos.count; i += 1) {
+    const y = manePos.getY(i);
+    const ridge = 1 + Math.sin(y * 26) * 0.16;
+    const x = manePos.getX(i);
+    const z = manePos.getZ(i);
+    manePos.setX(i, x - (ridge - 1) * 0.03);
+    manePos.setZ(i, z * ridge);
   }
-  
-  // Top of head / Crest
-  shape.lineTo(0.1, 0.95); 
-  
-  // Forehead slope down
-  shape.lineTo(0.25, 0.85);
-  
-  // Eye/Brow ridge area
-  shape.lineTo(0.3, 0.82);
-  shape.lineTo(0.35, 0.7);
-  
-  // Snout bridge
-  shape.lineTo(0.48, 0.55);
-  
-  // Snout nose tip (flat vertical)
-  shape.lineTo(0.45, 0.45);
-  
-  // Mouth/Jaw undercut
-  shape.lineTo(0.35, 0.4);
-  
-  // Cheek/Jaw curve
-  shape.lineTo(0.25, 0.35);
-  
-  // Neck front curve
-  shape.bezierCurveTo(0.28, 0.25, 0.32, 0.1, 0.2, -0.1);
-  
-  // Close at base
-  shape.lineTo(-0.2, -0.1);
+  maneTube.computeVertexNormals();
+  parts.push(maneTube);
 
-  // 3 Vents (Diagonal Slots) - modeled as holes
-  const createVent = (x: number, y: number) => {
-    const hole = new THREE.Path();
-    const w = 0.12;
-    const h = 0.03;
-    const slant = 0.08;
-    
-    // Draw a slanted rectangle
-    hole.moveTo(x, y);
-    hole.lineTo(x + w, y + slant);
-    hole.lineTo(x + w, y + slant + h);
-    hole.lineTo(x, y + h);
-    hole.lineTo(x, y);
-    shape.holes.push(hole);
-  };
-  
-  // Position vents along the neck
-  createVent(-0.05, 0.15);
-  createVent(0.0, 0.30);
-  createVent(0.05, 0.45);
+  // Soft mane scallops — keep them flush so they don't spike like horns
+  for (let i = 0; i < 7; i += 1) {
+    const t = i / 6;
+    const point = maneCurve.getPoint(t);
+    const tooth = new THREE.SphereGeometry(0.038 - t * 0.008, 12, 10);
+    tooth.scale(0.5, 0.35, 1.1);
+    tooth.translate(point.x - 0.01, point.y, 0);
+    parts.push(tooth);
+  }
 
-  const extrudeSettings = {
-    steps: 1,
-    depth: 0.18, // Thickness
-    bevelEnabled: true,
-    bevelThickness: 0.02,
-    bevelSize: 0.01,
-    bevelSegments: 3,
-  };
+  ([-1, 1] as const).forEach((side) => {
+    const socket = new THREE.SphereGeometry(0.028, 14, 12);
+    socket.scale(0.9, 0.75, 0.55);
+    socket.translate(0.14, 0.73, side * 0.12);
+    parts.push(socket);
+  });
 
-  const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-  geometry.center();
-  GEOMETRY_CACHE["knight-head"] = geometry;
-  return geometry;
+  const merged = mergeGeometries(parts, false);
+  parts.forEach((geo) => geo.dispose());
+
+  if (!merged) {
+    return new THREE.BoxGeometry(0.1, 0.1, 0.1);
+  }
+
+  const positions = merged.attributes.position;
+  for (let i = 0; i < positions.count; i += 1) {
+    const x = positions.getX(i);
+    const y = positions.getY(i);
+    const z = positions.getZ(i);
+
+    ([-1, 1] as const).forEach((side) => {
+      const dx = x - 0.14;
+      const dy = y - 0.73;
+      const dz = z - side * 0.11;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < 0.012) {
+        const push = (0.012 - d2) * 2.2;
+        positions.setZ(i, z - side * push);
+      }
+    });
+
+    if (x > 0.22 && x < 0.34 && y > 0.57 && y < 0.63) {
+      positions.setY(i, y - 0.012 * Math.sin(((x - 0.22) / 0.12) * Math.PI));
+    }
+  }
+
+  merged.computeVertexNormals();
+  merged.computeBoundingBox();
+  const bbox = merged.boundingBox!;
+  merged.translate(0, -bbox.min.y, -(bbox.min.z + bbox.max.z) / 2);
+
+  GEOMETRY_CACHE["knight-head-v7"] = merged;
+  return merged;
 };
-
-// Base geometry for Knight (since it uses extrude head on lathe base)
-const getKnightBaseGeometry = () =>
-  getLatheGeometry(BASE_PROFILE);
 
 type PieceType = "pawn" | "rook" | "knight" | "bishop" | "queen" | "king";
 type PieceColor = "white" | "black";
@@ -926,50 +1074,60 @@ const ModelSideControls = memo(function ModelSideControls({
     [onModelValueChange]
   );
 
+  const isWhiteSide = title.toLowerCase().includes("white");
+
   return (
-    <div className="space-y-3">
-      <p className="text-xs uppercase tracking-wide text-white/50">{title}</p>
-      <label className="block text-[11px] uppercase tracking-wide text-white/45">
-        Search models
+    <div className="rounded-2xl border border-[var(--hairline)] bg-[rgba(243,237,226,0.03)] p-4">
+      <div className="flex items-center gap-2.5">
+        <span
+          aria-hidden="true"
+          className={`inline-block h-3 w-3 rounded-full border ${
+            isWhiteSide
+              ? "border-[rgba(243,237,226,0.4)] bg-[var(--ivory)]"
+              : "border-[rgba(243,237,226,0.35)] bg-[#1d1712]"
+          }`}
+        />
+        <p className="text-sm font-semibold text-[var(--ivory)]">{title}</p>
+      </div>
+      <div className="mt-3 space-y-2.5">
         <input
           type="search"
           value={searchQuery}
           onChange={handleSearchChange}
-          placeholder="e.g. OpenAI, claude, gemini"
+          placeholder="Search models…"
           autoComplete="off"
           disabled={disabled}
           aria-label={searchAriaLabel}
-          className="mt-1 w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-sm text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+          className="field"
         />
-      </label>
-      <p className="text-[11px] text-white/40">
-        Showing {filteredPresets.length} of {allPresets.length}. Spaces = multiple terms.
-      </p>
-      <select
-        value={selectedPresetId}
-        onChange={handleSelectChange}
-        className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white focus:outline-none"
-        aria-label={selectAriaLabel}
-      >
-        {filteredPresets.map((preset) => (
-          <option key={preset.id} value={preset.id}>
-            {preset.label}
-          </option>
-        ))}
-      </select>
-      <input
-        type="text"
-        placeholder="OpenRouter model id (e.g. openai/gpt-4o)"
-        value={modelValue}
-        onChange={handleModelInputChange}
-        disabled={!isCustom}
-        className="w-full rounded border border-white/10 bg-white/10 px-3 py-2 text-white placeholder-white/40 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-      />
-      <p className="text-[11px] text-white/40">
-        {isCustom
-          ? "Set a custom OpenRouter model id for this side."
-          : "Preset locks the model id. Choose Custom to edit manually."}
-      </p>
+        <select
+          value={selectedPresetId}
+          onChange={handleSelectChange}
+          className="field"
+          aria-label={selectAriaLabel}
+        >
+          {filteredPresets.map((preset) => (
+            <option key={preset.id} value={preset.id}>
+              {preset.label}
+            </option>
+          ))}
+        </select>
+        {isCustom && (
+          <input
+            type="text"
+            placeholder="Model id (e.g. openai/gpt-4o)"
+            value={modelValue}
+            onChange={handleModelInputChange}
+            aria-label={`Custom model id for ${title}`}
+            className="field font-mono text-xs"
+          />
+        )}
+        {!isCustom && modelValue && (
+          <p className="truncate px-1 font-mono text-[11px] text-[var(--ivory-faint)]">
+            {modelValue}
+          </p>
+        )}
+      </div>
     </div>
   );
 });
@@ -1036,6 +1194,8 @@ export default function Home() {
   const replayMovesRef = useRef<Move[]>([]);
   const isReplayModeRef = useRef(false);
   const isReplayPlayingRef = useRef(false);
+  const tweensRef = useRef<SceneTween[]>([]);
+  const reducedMotionRef = useRef(false);
 
   const [status, setStatus] = useState("Initializing arena...");
   const [isPlaying, setIsPlaying] = useState(false);
@@ -1265,9 +1425,28 @@ export default function Home() {
     setMoveLog((game.moves.slice(-12) || []).reverse());
   }, []);
 
+  // Immediately settle any in-flight tweens for an object (used when a new
+  // animation must take over, or the piece is being removed).
+  const finishTweensFor = useCallback((object: THREE.Object3D) => {
+    tweensRef.current = tweensRef.current.filter((tween) => {
+      if (tween.object !== object) return true;
+      tween.update(1);
+      tween.onComplete?.();
+      return false;
+    });
+  }, []);
+
   const clearPieces = useCallback(() => {
     const scene = sceneRef.current;
     if (!scene) return;
+
+    // Flush pending tweens so dying capture animations don't try to touch
+    // pieces after a reset.
+    tweensRef.current.forEach((tween) => {
+      tween.update(1);
+      tween.onComplete?.();
+    });
+    tweensRef.current = [];
 
     Object.values(piecesRef.current).forEach((mesh) => {
       scene.remove(mesh);
@@ -1277,106 +1456,74 @@ export default function Home() {
   }, []);
 
   const createPieceMesh = useCallback((type: PieceType, color: PieceColor) => {
-    const material = new THREE.MeshStandardMaterial({
-      color: color === "white" ? 0xffffff : 0x222222,
-      roughness: 0.5,
-      metalness: 0.4,
-    });
+    // Lacquered boxwood / ebony: clearcoat gives the polished tournament sheen
+    const material =
+      color === "white"
+        ? new THREE.MeshPhysicalMaterial({
+            color: 0xe9dfc8,
+            roughness: 0.32,
+            metalness: 0.0,
+            clearcoat: 0.55,
+            clearcoatRoughness: 0.28,
+            sheen: 0.25,
+            sheenColor: new THREE.Color(0xfff4dd),
+            envMapIntensity: 1.15,
+          })
+        : new THREE.MeshPhysicalMaterial({
+            color: 0x181109,
+            roughness: 0.24,
+            metalness: 0.0,
+            clearcoat: 0.85,
+            clearcoatRoughness: 0.18,
+            envMapIntensity: 1.6,
+          });
 
     let mesh: THREE.Object3D;
 
     if (type === "knight") {
-      const group = new THREE.Group();
-
-      const baseGeo = getKnightBaseGeometry();
-      const base = new THREE.Mesh(baseGeo, material);
-      base.castShadow = true;
-      base.receiveShadow = true;
-      group.add(base);
-
       const headGeo = getKnightHeadGeometry();
       const head = new THREE.Mesh(headGeo, material);
-      // Center of extruded geometry is at (0,0,0).
-      // Approximate height of head is 0.9. Base is 0.15 height.
-      // Shift head up.
-      head.position.y = 0.55;
-      
-      // Rotate to face forward
-      // Extrude is in XY plane. Thickness along Z.
-      // White (row 7, +Z) faces -Z (toward 0). 
-      // Black (row 0, -Z) faces +Z (toward 7).
-      // If shape faces +X (right) in XY plane:
-      // Rotate Y +90 deg -> Faces -Z?
-      //   X becomes -Z.
-      //   Y stays Y.
-      //   Z becomes X.
-      // So if shape points +X, rotating +90 Y makes it point -Z (White's direction).
-      // Rotating -90 Y makes it point +Z (Black's direction).
       head.rotation.y = color === "white" ? Math.PI / 2 : -Math.PI / 2;
-      
       head.castShadow = true;
       head.receiveShadow = true;
-      group.add(head);
-
-      mesh = group;
+      mesh = head;
     } else if (type === "rook") {
       const group = new THREE.Group();
       const bodyGeo = getRookGeometry();
+      bodyGeo.computeBoundingBox();
+      const bodyTop = bodyGeo.boundingBox?.max.y ?? 0.9;
       const body = new THREE.Mesh(bodyGeo, material);
       body.castShadow = true;
       body.receiveShadow = true;
       group.add(body);
 
-      // Add crenellations using cylinder segments
+      // Battlements embedded into the turret rim (overlap kills the float gap)
       const crenellationCount = 6;
       const outerRadius = 0.28;
       const innerRadius = 0.20;
-      const height = 0.12;
-      const startY = 0.90;
-      
-      // Arc length for each merlon (tooth)
-      // Total circle is 2*PI. We have 6 teeth and 6 gaps.
-      // Let's say teeth covers 60% of space.
+      const height = 0.14;
+      const startY = bodyTop - 0.04;
       const totalAngle = Math.PI * 2;
       const segmentAngle = totalAngle / crenellationCount;
       const toothAngle = segmentAngle * 0.6;
-      
-      const crenGeo = new THREE.CylinderGeometry(outerRadius, outerRadius, height, 16, 1, true, 0, toothAngle);
-      
-      // We need a thick wall, not just a thin shell. 
-      // CylinderGeometry is a shell if openEnded is false, but it has top/bottom caps.
-      // It doesn't have thickness.
-      // We can construct a shape and extrude it, or simpler: 
-      // Use RingGeometry extruded? No.
-      // Use a custom shape for the "C" profile (pie slice) and extrude it up.
-      
+
       const shape = new THREE.Shape();
       shape.absarc(0, 0, outerRadius, 0, toothAngle, false);
       shape.lineTo(Math.cos(toothAngle) * innerRadius, Math.sin(toothAngle) * innerRadius);
       shape.absarc(0, 0, innerRadius, toothAngle, 0, true);
       shape.lineTo(outerRadius, 0);
-      
-      const extrudeSettings = {
+
+      const toothGeometry = new THREE.ExtrudeGeometry(shape, {
         depth: height,
         bevelEnabled: false,
-        curveSegments: 4
-      };
-      
-      const toothGeometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-      // Extrude goes along Z axis by default. We want Y.
-      // Rotate X -90 deg.
+        curveSegments: 6,
+      });
       toothGeometry.rotateX(-Math.PI / 2);
-      // Correct position: Extrude starts at Z=0 and goes to Z=depth.
-      // After rotation X -90: starts Y=0 goes Y=depth.
-      
+
       for (let i = 0; i < crenellationCount; i++) {
-        const angle = i * segmentAngle;
         const tooth = new THREE.Mesh(toothGeometry, material);
-        
-        // We need to rotate each tooth around the center Y axis
-        tooth.rotation.y = angle;
+        tooth.rotation.y = i * segmentAngle;
         tooth.position.y = startY;
-        
         tooth.castShadow = true;
         tooth.receiveShadow = true;
         group.add(tooth);
@@ -1385,48 +1532,43 @@ export default function Home() {
     } else if (type === "queen") {
       const group = new THREE.Group();
       const bodyGeo = getQueenGeometry();
+      bodyGeo.computeBoundingBox();
+      const rimY = bodyGeo.boundingBox?.max.y ?? 0.98;
       const body = new THREE.Mesh(bodyGeo, material);
       body.castShadow = true;
       body.receiveShadow = true;
       group.add(body);
 
-      // Add crown points (coronet)
       const pointCount = 8;
-      const radius = 0.26; // Matched to new rim radius
-      const height = 0.98; // Top of rim
-      
+      const radius = 0.26;
+      // Cone is centered: base at -h/2, tip at +h/2. Embed the base into the rim.
+      const spikeHeight = 0.16;
       for (let i = 0; i < pointCount; i++) {
         const angle = (i / pointCount) * Math.PI * 2;
-        // Use smaller, sharper cones for points
-        const coneGeo = new THREE.ConeGeometry(0.05, 0.15, 8); 
+        const coneGeo = new THREE.ConeGeometry(0.045, spikeHeight, 10);
         const spike = new THREE.Mesh(coneGeo, material);
         spike.position.set(
           Math.cos(angle) * radius,
-          height + 0.05, // Sit on top of rim
+          rimY + spikeHeight * 0.2,
           Math.sin(angle) * radius
         );
-        // Tilt outward to match flare
-        // Calculate vector from center to position
-        const spikePos = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
         const axis = new THREE.Vector3(-Math.sin(angle), 0, Math.cos(angle));
-        spike.rotateOnAxis(axis, 0.2); // Tilt out
-        
+        spike.rotateOnAxis(axis, 0.18);
         spike.castShadow = true;
         spike.receiveShadow = true;
         group.add(spike);
       }
 
-      // Central Dome and Finial
-      const domeGeo = new THREE.SphereGeometry(0.14, 16, 16, 0, Math.PI * 2, 0, Math.PI / 2); // Hemisphere
+      const domeGeo = new THREE.SphereGeometry(0.14, 20, 16, 0, Math.PI * 2, 0, Math.PI / 2);
       const dome = new THREE.Mesh(domeGeo, material);
-      dome.position.y = 0.95; // Sit on center floor
+      dome.position.y = rimY - 0.04;
       dome.castShadow = true;
       dome.receiveShadow = true;
       group.add(dome);
 
-      const finialGeo = new THREE.SphereGeometry(0.06, 12, 12);
+      const finialGeo = new THREE.SphereGeometry(0.055, 14, 14);
       const finial = new THREE.Mesh(finialGeo, material);
-      finial.position.y = 0.95 + 0.14 + 0.04; // On top of dome
+      finial.position.y = rimY + 0.12;
       finial.castShadow = true;
       finial.receiveShadow = true;
       group.add(finial);
@@ -1434,67 +1576,69 @@ export default function Home() {
       mesh = group;
     } else if (type === "king") {
       const group = new THREE.Group();
-      
       const bodyGeo = getKingGeometry();
+      bodyGeo.computeBoundingBox();
+      const topY = bodyGeo.boundingBox?.max.y ?? 1.12;
       const body = new THREE.Mesh(bodyGeo, material);
       body.castShadow = true;
       body.receiveShadow = true;
       group.add(body);
 
-      // Cross Finial
       const crossGroup = new THREE.Group();
-      crossGroup.position.y = 1.12; // Sits on top of the lathe geometry
+      // Embed the cross base into the crown so it doesn't float
+      crossGroup.position.y = topY - 0.04;
 
-      // Small connector orb
-      const connectorGeo = new THREE.SphereGeometry(0.06, 8, 8);
+      const connectorGeo = new THREE.SphereGeometry(0.055, 10, 10);
       const connector = new THREE.Mesh(connectorGeo, material);
-      connector.position.y = 0.04;
+      connector.position.y = 0.03;
       connector.castShadow = true;
       crossGroup.add(connector);
 
-      // Cross vertical
       const crossVGeo = new THREE.BoxGeometry(0.06, 0.22, 0.06);
       const crossV = new THREE.Mesh(crossVGeo, material);
-      crossV.position.y = 0.15;
+      crossV.position.y = 0.14;
       crossV.castShadow = true;
       crossGroup.add(crossV);
-      
-      // Cross horizontal
+
       const crossHGeo = new THREE.BoxGeometry(0.16, 0.06, 0.06);
       const crossH = new THREE.Mesh(crossHGeo, material);
-      crossH.position.y = 0.15;
+      crossH.position.y = 0.14;
       crossH.castShadow = true;
       crossGroup.add(crossH);
 
       group.add(crossGroup);
-
       mesh = group;
     } else if (type === "bishop") {
       const group = new THREE.Group();
       const bodyGeo = getBishopGeometry();
+      bodyGeo.computeBoundingBox();
+      const topY = bodyGeo.boundingBox?.max.y ?? 1.1;
       const body = new THREE.Mesh(bodyGeo, material);
       body.castShadow = true;
       body.receiveShadow = true;
       group.add(body);
 
-      // Diagonal cut (Cleft)
-      // Use a smaller box that stays within the head volume mostly
-      const cleftGeo = new THREE.BoxGeometry(0.04, 0.25, 0.25);
-      const cleftMat = new THREE.MeshStandardMaterial({ 
-        color: 0x1a1a1a, 
-        roughness: 0.9,
-        metalness: 0.1
+      // Finial sits on the mitre tip with overlap
+      const finialGeo = new THREE.SphereGeometry(0.05, 24, 24);
+      const finial = new THREE.Mesh(finialGeo, material);
+      finial.position.y = topY + 0.02;
+      finial.castShadow = true;
+      group.add(finial);
+
+      // Mitre slit on the upper crown
+      const slitMat = new THREE.MeshPhysicalMaterial({
+        color: color === "white" ? 0x5a4a38 : 0x030201,
+        roughness: 1,
+        metalness: 0,
       });
-      const cleft = new THREE.Mesh(cleftGeo, cleftMat);
-      
-      // Position: Centered vertically on the head, shifted forward (+Z)
-      // Rotated to cut diagonally
-      cleft.position.set(0, 0.90, 0.12);
-      cleft.rotation.x = -Math.PI / 4; // 45 degree angle
-      
-      cleft.castShadow = false;
-      cleft.receiveShadow = true;
-      group.add(cleft);
+      const slitGeo = new THREE.BoxGeometry(0.04, 0.16, 0.02);
+      const slit = new THREE.Mesh(slitGeo, slitMat);
+      slit.position.set(0, topY - 0.08, 0.1);
+      slit.rotation.x = -0.85;
+      slit.castShadow = false;
+      slit.receiveShadow = true;
+      group.add(slit);
+
       mesh = group;
     } else {
       let geometry: THREE.BufferGeometry;
@@ -1507,6 +1651,10 @@ export default function Home() {
       m.receiveShadow = true;
       mesh = m;
     }
+
+    // Stretch toward Staunton proportions: taller silhouettes read as real
+    // tournament pieces instead of squat game tokens.
+    mesh.scale.set(1.06, 1.28, 1.06);
 
     return mesh;
   }, []);
@@ -1616,26 +1764,108 @@ export default function Home() {
       const fromKey = `${fromRow}-${fromCol}`;
       const toKey = `${toRow}-${toCol}`;
 
+      // Board bookkeeping happens immediately; only the visuals are deferred.
       const target = piecesRef.current[toKey];
       if (target) {
-        scene.remove(target);
         delete piecesRef.current[toKey];
       }
 
       const piece = piecesRef.current[fromKey];
+      const toPosition = new THREE.Vector3(
+        toCol * SQUARE_SIZE - BOARD_OFFSET,
+        0,
+        toRow * SQUARE_SIZE - BOARD_OFFSET
+      );
+
       if (piece) {
-        piece.position.set(
-          toCol * SQUARE_SIZE - BOARD_OFFSET,
-          0, // Sit directly on board
-          toRow * SQUARE_SIZE - BOARD_OFFSET
-        );
         piece.userData.row = toRow;
         piece.userData.col = toCol;
         piecesRef.current[toKey] = piece;
         delete piecesRef.current[fromKey];
       }
+
+      if (!piece || reducedMotionRef.current) {
+        if (target) {
+          finishTweensFor(target);
+          scene.remove(target);
+        }
+        piece?.position.copy(toPosition);
+        return;
+      }
+
+      finishTweensFor(piece);
+      const fromPosition = piece.position.clone();
+      fromPosition.y = 0;
+      const travel = new THREE.Vector3().subVectors(toPosition, fromPosition);
+
+      // Knights leap over the field; everyone else glides with a gentle lift,
+      // like a hand picking the piece up and placing it down.
+      const isKnight = piece.userData.type === "knight";
+      const lift = isKnight ? 0.85 : 0.16;
+      const moveDuration = isKnight ? 0.55 : 0.45;
+
+      tweensRef.current.push({
+        object: piece,
+        delay: 0,
+        duration: moveDuration,
+        elapsed: 0,
+        update: (progress) => {
+          const t = easeInOutCubic(progress);
+          piece.position.set(
+            fromPosition.x + travel.x * t,
+            Math.sin(t * Math.PI) * lift,
+            fromPosition.z + travel.z * t
+          );
+        },
+        onComplete: () => {
+          piece.position.copy(toPosition);
+        },
+      });
+
+      if (target) {
+        finishTweensFor(target);
+
+        // Knock the victim over: it topples away from the attacker, sinks
+        // through the board, and fades out.
+        const fallDirection =
+          travel.lengthSq() > 0.0001
+            ? travel.clone().setY(0).normalize()
+            : new THREE.Vector3(0, 0, 1);
+        const toppleAxis = new THREE.Vector3()
+          .crossVectors(new THREE.Vector3(0, 1, 0), fallDirection)
+          .normalize();
+        const restingQuaternion = target.quaternion.clone();
+        const knockQuaternion = new THREE.Quaternion();
+        const basePosition = target.position.clone();
+        basePosition.y = 0;
+
+        tweensRef.current.push({
+          object: target,
+          // Start falling as the attacker arrives on the square
+          delay: moveDuration * 0.55,
+          duration: 0.5,
+          elapsed: 0,
+          update: (progress) => {
+            const t = easeOutQuart(progress);
+            knockQuaternion.setFromAxisAngle(
+              toppleAxis,
+              t * (Math.PI / 2) * 1.05
+            );
+            target.quaternion.copy(knockQuaternion).multiply(restingQuaternion);
+            target.position.set(
+              basePosition.x + fallDirection.x * t * 0.35,
+              -t * 0.32,
+              basePosition.z + fallDirection.z * t * 0.35
+            );
+            setPieceOpacity(target, Math.max(0, 1 - progress * 1.2));
+          },
+          onComplete: () => {
+            scene.remove(target);
+          },
+        });
+      }
     },
-    []
+    [finishTweensFor]
   );
 
   const playNextReplayMove = useCallback(() => {
@@ -1879,7 +2109,8 @@ export default function Home() {
     if (!container) return;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1a1a2e);
+    scene.background = new THREE.Color(0x0d0b09);
+    scene.fog = new THREE.Fog(0x0d0b09, 14, 30);
     sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(
@@ -1896,28 +2127,55 @@ export default function Home() {
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    // Studio environment map so lacquered piece materials pick up realistic
+    // reflections instead of flat shading.
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmremGenerator.fromScene(
+      new RoomEnvironment(),
+      0.04
+    ).texture;
+    scene.environmentIntensity = 0.4;
+    pmremGenerator.dispose();
+
+    const ambientLight = new THREE.AmbientLight(0xfff2dd, 0.35);
     scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
-    directionalLight.position.set(10, 20, 10);
+    // Warm key light, like a tournament hall spotlight
+    const directionalLight = new THREE.DirectionalLight(0xffe8c4, 1.4);
+    directionalLight.position.set(8, 16, 8);
     directionalLight.castShadow = true;
+    directionalLight.shadow.mapSize.set(2048, 2048);
+    directionalLight.shadow.camera.left = -8;
+    directionalLight.shadow.camera.right = 8;
+    directionalLight.shadow.camera.top = 8;
+    directionalLight.shadow.camera.bottom = -8;
+    directionalLight.shadow.camera.near = 1;
+    directionalLight.shadow.camera.far = 50;
+    directionalLight.shadow.bias = -0.0004;
+    directionalLight.shadow.radius = 4;
     scene.add(directionalLight);
 
-    const pointLight = new THREE.PointLight(0x4ecdc4, 1.2, 100);
+    const pointLight = new THREE.PointLight(0xd9a441, 1.4, 100);
     pointLight.position.set(0, 10, 0);
     scene.add(pointLight);
+
+    const rimLight = new THREE.DirectionalLight(0x6b7fa3, 0.35);
+    rimLight.position.set(-12, 6, -12);
+    scene.add(rimLight);
 
     for (let row = 0; row < BOARD_SIZE; row += 1) {
       for (let col = 0; col < BOARD_SIZE; col += 1) {
         const isLight = (row + col) % 2 === 0;
         const geometry = new THREE.BoxGeometry(SQUARE_SIZE, 0.2, SQUARE_SIZE);
         const material = new THREE.MeshStandardMaterial({
-          color: isLight ? 0xeeeed2 : 0x769656,
-          roughness: 0.8,
+          color: isLight ? 0xe8dfcd : 0x4a3527,
+          roughness: isLight ? 0.65 : 0.55,
           metalness: 0.1,
         });
         const square = new THREE.Mesh(geometry, material);
@@ -1931,8 +2189,67 @@ export default function Home() {
       }
     }
 
+    // Board plinth: a dark walnut frame under the squares
+    const plinthGeometry = new THREE.BoxGeometry(
+      BOARD_SIZE * SQUARE_SIZE + 0.7,
+      0.35,
+      BOARD_SIZE * SQUARE_SIZE + 0.7
+    );
+    const plinthMaterial = new THREE.MeshStandardMaterial({
+      color: 0x241811,
+      roughness: 0.5,
+      metalness: 0.25,
+    });
+    const plinth = new THREE.Mesh(plinthGeometry, plinthMaterial);
+    plinth.position.y = -0.28;
+    plinth.receiveShadow = true;
+    scene.add(plinth);
+
+    // Faint floor disc so the board reads as a stage
+    const floorGeometry = new THREE.CircleGeometry(16, 48);
+    const floorMaterial = new THREE.MeshStandardMaterial({
+      color: 0x12100c,
+      roughness: 0.95,
+      metalness: 0,
+    });
+    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.46;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    reducedMotionRef.current =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const clock = new THREE.Clock();
+
     const animate = () => {
       if (!sceneRef.current || !cameraRef.current || !rendererRef.current) return;
+
+      const delta = Math.min(clock.getDelta(), 0.1);
+
+      if (tweensRef.current.length > 0) {
+        const remaining: SceneTween[] = [];
+        tweensRef.current.forEach((tween) => {
+          tween.elapsed += delta;
+          if (tween.elapsed < tween.delay) {
+            remaining.push(tween);
+            return;
+          }
+          const progress = Math.min(
+            1,
+            (tween.elapsed - tween.delay) / tween.duration
+          );
+          tween.update(progress);
+          if (progress >= 1) {
+            tween.onComplete?.();
+          } else {
+            remaining.push(tween);
+          }
+        });
+        tweensRef.current = remaining;
+      }
 
       angleRef.current += 0.002;
       const radius = 10;
@@ -2266,30 +2583,48 @@ export default function Home() {
     });
   }, [allPresets]);
 
+  const isLive = isReplayMode ? isReplayPlaying : isPlaying;
+
   const ControlPanelContent = () => (
     <>
-      <h1 className="text-2xl font-semibold">♟️ LLM Chess Arena ♟️</h1>
-      <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
-        <p className="text-teal-300">{status}</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="eyebrow">The Arena</p>
+          <h1 className="panel-title mt-1 text-[1.7rem] leading-tight text-[var(--ivory)]">
+            LLM Chess
+          </h1>
+        </div>
         <a
           href="/replays"
-          className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 transition hover:border-white/40 hover:text-white"
+          className="btn btn-ghost px-3 py-1.5 text-xs"
+          aria-label="Browse saved replays"
         >
           Replays
         </a>
       </div>
+
+      <div className="mt-4 flex items-center gap-2.5 rounded-xl border border-[var(--hairline)] bg-[rgba(243,237,226,0.04)] px-3.5 py-2.5">
+        <span
+          aria-hidden="true"
+          className={`h-2 w-2 shrink-0 rounded-full ${
+            isLive ? "live-dot bg-[var(--brass)]" : "bg-[var(--ivory-faint)]"
+          }`}
+        />
+        <p className="min-w-0 truncate text-[13px] text-[var(--ivory-dim)]">{status}</p>
+      </div>
+
       {error && (
-        <div className="mt-2 rounded-md border border-red-500/50 bg-red-500/20 p-2 text-xs text-red-300">
+        <div className="mt-3 rounded-xl border border-[rgba(176,72,60,0.4)] bg-[rgba(176,72,60,0.12)] p-3 text-xs text-[#e8a79e]">
           <p className="whitespace-pre-wrap">{error}</p>
           {isOpenRouterCreditsError(error) && (
-            <p className="mt-2 border-t border-red-500/40 pt-2 text-[11px] text-red-200/95">
-              This comes from your OpenRouter account (API usage is billed there). Add credits or confirm
-              your key matches the right account:{" "}
+            <p className="mt-2 border-t border-[rgba(176,72,60,0.3)] pt-2 text-[11px]">
+              This comes from your OpenRouter account (API usage is billed there). Add
+              credits or confirm your key matches the right account:{" "}
               <a
                 href={OPENROUTER_CREDITS_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="font-medium text-teal-200 underline decoration-teal-400/70 underline-offset-2 hover:text-teal-100"
+                className="font-medium text-[var(--brass-bright)] underline underline-offset-2 hover:text-[var(--brass)]"
               >
                 openrouter.ai/settings/credits
               </a>
@@ -2298,78 +2633,118 @@ export default function Home() {
         </div>
       )}
       {replayError && (
-        <div className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/20 p-2 text-xs text-amber-200">
+        <div className="mt-3 rounded-xl border border-[rgba(217,164,65,0.4)] bg-[rgba(217,164,65,0.1)] p-3 text-xs text-[var(--brass-bright)]">
           {replayError}
         </div>
       )}
       {isReplayMode && replayDetail && (
-        <div className="mt-2 rounded-md border border-white/10 bg-white/5 p-2 text-xs text-white/70">
-          <div className="font-semibold text-white/90">Replay mode</div>
-          <div className="mt-1">
+        <div className="mt-3 rounded-xl border border-[var(--hairline)] bg-[rgba(243,237,226,0.04)] p-3 text-xs text-[var(--ivory-dim)]">
+          <p className="eyebrow">Replay mode</p>
+          <p className="mt-1.5 font-medium text-[var(--ivory)]">
             {replayDetail.whiteModel} vs {replayDetail.blackModel}
-          </div>
-          <div className="mt-1">
+          </p>
+          <p className="mt-1">
             Winner: {replayDetail.winner} · Moves: {replayDetail.turns}
-          </div>
+          </p>
         </div>
       )}
 
-      <div className="mt-4 space-y-3">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-white/50">Battle Controls</p>
-          <div className="mt-2 flex flex-wrap gap-2 text-sm">
+      <div className="mt-5 space-y-4">
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={handleStart}
+            className="btn btn-primary flex-1"
+            disabled={
+              isReplayMode
+                ? isReplayPlaying || replayMoves.length === 0
+                : isPlaying ||
+                  !whiteConfig.model.trim() ||
+                  !blackConfig.model.trim()
+            }
+            aria-label="Start battle"
+          >
+            {isReplayMode ? "Play Replay" : "Start Battle"}
+          </button>
+          <button
+            onClick={handlePause}
+            className="btn btn-ghost"
+            disabled={isReplayMode ? !isReplayPlaying : !isPlaying}
+            aria-label="Pause battle"
+          >
+            Pause
+          </button>
+          <button
+            onClick={handleReset}
+            className="btn btn-ghost"
+            aria-label="Reset game"
+          >
+            Reset
+          </button>
+          {isReplayMode && (
             <button
-              onClick={handleStart}
-              className="rounded-md bg-teal-400 px-3 py-2 font-semibold text-slate-900 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-500"
-              disabled={
-                isReplayMode
-                  ? isReplayPlaying || replayMoves.length === 0
-                  : isPlaying ||
-                    !whiteConfig.model.trim() ||
-                    !blackConfig.model.trim()
-              }
-              aria-label="Start battle"
+              onClick={exitReplay}
+              className="btn btn-ghost"
+              aria-label="Exit replay"
             >
-              {isReplayMode ? "Play Replay" : "Start Battle"}
+              Exit Replay
             </button>
-            <button
-              onClick={handlePause}
-              className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20"
-              disabled={isReplayMode ? !isReplayPlaying : !isPlaying}
-              aria-label="Pause battle"
-            >
-              {isReplayMode ? "Pause Replay" : "Pause"}
-            </button>
-            <button
-              onClick={handleReset}
-              className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20"
-              aria-label="Reset game"
-            >
-              {isReplayMode ? "Reset Replay" : "Reset"}
-            </button>
-            {isReplayMode && (
-              <button
-                onClick={exitReplay}
-                className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20"
-                aria-label="Exit replay"
-              >
-                Exit Replay
-              </button>
-            )}
-            <button
-              onClick={handleRandomMatchup}
-              className="rounded-md bg-white/10 px-3 py-2 transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isPlaying || isReplayMode}
-              aria-label="Pick a random matchup"
-            >
-              Random
-            </button>
-          </div>
+          )}
         </div>
 
-        <div>
-          <label className="flex items-center justify-between text-xs uppercase tracking-wide text-white/50">
-            Turn Delay (ms)
+        <div className="space-y-3 border-t border-[var(--hairline)] pt-4">
+          <div className="flex items-center justify-between gap-2">
+            <p className="eyebrow">Matchup</p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleRandomMatchup}
+                className="btn btn-ghost px-3 py-1 text-[11px]"
+                disabled={isPlaying || isReplayMode}
+                aria-label="Pick a random matchup"
+              >
+                Randomize
+              </button>
+              <button
+                type="button"
+                onClick={handleRefreshOpenRouterModels}
+                disabled={isLoadingOpenRouterModels || isPlaying || isReplayMode}
+                className="btn btn-ghost px-3 py-1 text-[11px]"
+                aria-label="Refresh OpenRouter model list from the API"
+              >
+                {isLoadingOpenRouterModels ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
+          </div>
+
+          <ModelSideControls
+            title="White"
+            searchAriaLabel="Filter white model list by label or model id"
+            selectAriaLabel="Model preset for white pieces"
+            allPresets={allPresets}
+            selectedPresetId={whitePresetId}
+            onSelectPresetId={(presetId) => handlePresetChange("white", presetId)}
+            modelValue={whiteConfig.model}
+            onModelValueChange={(value) => handleConfigChange("white", "model", value)}
+            isCustom={whiteIsCustom}
+            disabled={isPlaying || isReplayMode}
+          />
+
+          <ModelSideControls
+            title="Black"
+            searchAriaLabel="Filter black model list by label or model id"
+            selectAriaLabel="Model preset for black pieces"
+            allPresets={allPresets}
+            selectedPresetId={blackPresetId}
+            onSelectPresetId={(presetId) => handlePresetChange("black", presetId)}
+            modelValue={blackConfig.model}
+            onModelValueChange={(value) => handleConfigChange("black", "model", value)}
+            isCustom={blackIsCustom}
+            disabled={isPlaying || isReplayMode}
+          />
+        </div>
+
+        <div className="border-t border-[var(--hairline)] pt-4">
+          <label className="flex items-center justify-between gap-3">
+            <span className="eyebrow">Turn delay (ms)</span>
             <input
               type="number"
               min={250}
@@ -2391,170 +2766,152 @@ export default function Home() {
                 if (event.key !== "Enter") return;
                 event.currentTarget.blur();
               }}
-              className="ml-2 w-20 rounded bg-white/10 px-2 py-1 text-right text-white placeholder-white/40 focus:outline-none"
+              className="field w-24 text-right"
+              aria-label="Turn delay in milliseconds"
             />
           </label>
         </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs uppercase tracking-wide text-white/50">
-            OpenRouter catalog
-          </p>
-          <button
-            type="button"
-            onClick={handleRefreshOpenRouterModels}
-            disabled={isLoadingOpenRouterModels || isPlaying || isReplayMode}
-            className="rounded-md border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] text-white/80 transition hover:border-white/30 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label="Refresh OpenRouter model list from the API"
-          >
-            {isLoadingOpenRouterModels ? "Refreshing…" : "Refresh models"}
-          </button>
-        </div>
-
-        <ModelSideControls
-          title="White LLM"
-          searchAriaLabel="Filter white model list by label or model id"
-          selectAriaLabel="Model preset for white pieces"
-          allPresets={allPresets}
-          selectedPresetId={whitePresetId}
-          onSelectPresetId={(presetId) => handlePresetChange("white", presetId)}
-          modelValue={whiteConfig.model}
-          onModelValueChange={(value) => handleConfigChange("white", "model", value)}
-          isCustom={whiteIsCustom}
-          disabled={isPlaying || isReplayMode}
-        />
-
-        <ModelSideControls
-          title="Black LLM"
-          searchAriaLabel="Filter black model list by label or model id"
-          selectAriaLabel="Model preset for black pieces"
-          allPresets={allPresets}
-          selectedPresetId={blackPresetId}
-          onSelectPresetId={(presetId) => handlePresetChange("black", presetId)}
-          modelValue={blackConfig.model}
-          onModelValueChange={(value) => handleConfigChange("black", "model", value)}
-          isCustom={blackIsCustom}
-          disabled={isPlaying || isReplayMode}
-        />
       </div>
-
     </>
+  );
+
+  const materialScore = (pieces: Piece[]) =>
+    pieces.reduce((total, piece) => total + PIECE_VALUE[piece.type], 0);
+
+  const whiteScore = materialScore(capturedByWhite);
+  const blackScore = materialScore(capturedByBlack);
+
+  const CapturedRow = ({
+    label,
+    pieces,
+    score,
+    lead,
+  }: {
+    label: string;
+    pieces: Piece[];
+    score: number;
+    lead: boolean;
+  }) => (
+    <div className="rounded-xl border border-[var(--hairline)] bg-[rgba(243,237,226,0.03)] p-3">
+      <div className="flex items-center justify-between">
+        <p className="eyebrow">{label}</p>
+        <span
+          className={`font-mono text-xs ${
+            lead && score > 0
+              ? "font-semibold text-[var(--brass-bright)]"
+              : "text-[var(--ivory-faint)]"
+          }`}
+        >
+          {score > 0 ? `+${score}` : "—"}
+        </span>
+      </div>
+      <div className="mt-2 flex min-h-7 flex-wrap items-center gap-1">
+        {pieces.map((piece, index) => (
+          <img
+            key={`${label}-${piece.type}-${index}`}
+            src={PIECE_IMAGE_MAP[piece.color][piece.type]}
+            alt={`${piece.color} ${piece.type}`}
+            title={PIECE_LABEL[piece.type]}
+            className="pop-in h-7 w-7 object-contain"
+          />
+        ))}
+      </div>
+    </div>
   );
 
   const BattleLogContent = () => (
     <>
-      <h2 className="text-xl font-semibold">Battle Log</h2>
-
-      <div className="mt-4">
-        <p className="text-xs uppercase tracking-wide text-white/50">Moves</p>
-        <div
-          ref={moveListRef}
-          className="mt-2 max-h-72 overflow-y-auto rounded-lg bg-white/5 p-3 pr-4"
-        >
-          <ol className="space-y-3 text-sm text-white/80">
-            {moveHistory.length === 0 ? (
-              <li className="text-white/40">No moves played yet.</li>
-            ) : (
-              moveHistory.map((entry, index) => {
-                const moveNumber = Math.floor(index / 2) + 1;
-                const colorLabel = entry.color === "white" ? "White" : "Black";
-                return (
-                  <li key={`${entry.notation}-${index}`} className="flex gap-2">
-                    <span className="min-w-[2.5rem] text-xs text-white/40">#{moveNumber}</span>
-                    <div className="flex-1">
-                      <p className="font-medium text-white">
-                        {colorLabel} · {entry.notation}
-                      </p>
-                      {entry.captured && (
-                        <p className="text-[11px] text-white/50">
-                          Captured {PIECE_LABEL[entry.captured.type]}
-                        </p>
-                      )}
-                    </div>
-                  </li>
-                );
-              })
-            )}
-          </ol>
-        </div>
+      <div className="flex items-baseline justify-between">
+        <h2 className="panel-title text-xl text-[var(--ivory)]">Battle Log</h2>
+        <span className="font-mono text-[11px] text-[var(--ivory-faint)]">
+          {moveHistory.length} {moveHistory.length === 1 ? "ply" : "plies"}
+        </span>
       </div>
 
-      <div className="mt-6 space-y-6 border-t border-white/10 pt-4">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-white/50">Captured by White</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {capturedByWhite.length === 0 ? (
-              <span className="text-[11px] text-white/40">None yet.</span>
-            ) : (
-              capturedByWhite.map((piece, index) => (
-                <div
-                  key={`white-captured-${piece.type}-${index}`}
-                  className="flex items-center gap-1 rounded bg-white/10 px-2 py-1"
+      <div
+        ref={moveListRef}
+        className="log-scroll mt-4 max-h-72 overflow-y-auto rounded-xl border border-[var(--hairline)] bg-[rgba(243,237,226,0.03)] p-3"
+      >
+        <ol className="space-y-1 text-sm">
+          {moveHistory.length === 0 ? (
+            <li className="py-6 text-center text-xs text-[var(--ivory-faint)]">
+              Moves will appear here once the battle begins.
+            </li>
+          ) : (
+            moveHistory.map((entry, index) => {
+              const moveNumber = Math.floor(index / 2) + 1;
+              const isWhiteMove = entry.color === "white";
+              return (
+                <li
+                  key={`${entry.notation}-${index}`}
+                  className="log-entry flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-[rgba(243,237,226,0.05)]"
                 >
-                  <img
-                    src={PIECE_IMAGE_MAP[piece.color][piece.type]}
-                    alt={`${piece.color} ${piece.type}`}
-                    className="h-6 w-6 object-contain"
+                  <span className="w-7 shrink-0 text-right font-mono text-[11px] text-[var(--ivory-faint)]">
+                    {moveNumber}.
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className={`h-2 w-2 shrink-0 rounded-full border ${
+                      isWhiteMove
+                        ? "border-[rgba(243,237,226,0.4)] bg-[var(--ivory)]"
+                        : "border-[rgba(243,237,226,0.35)] bg-[#1d1712]"
+                    }`}
                   />
-                  <span className="text-[11px] text-white/70">{PIECE_LABEL[piece.type]}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--ivory)]">
+                    {entry.notation}
+                  </span>
+                  {entry.captured && (
+                    <span className="pop-in shrink-0 rounded-full bg-[rgba(176,72,60,0.18)] px-2 py-0.5 text-[10px] font-medium text-[#e8a79e]">
+                      ×{PIECE_LABEL[entry.captured.type]}
+                    </span>
+                  )}
+                </li>
+              );
+            })
+          )}
+        </ol>
+      </div>
 
-        <div>
-          <p className="text-xs uppercase tracking-wide text-white/50">Captured by Black</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {capturedByBlack.length === 0 ? (
-              <span className="text-[11px] text-white/40">None yet.</span>
-            ) : (
-              capturedByBlack.map((piece, index) => (
-                <div
-                  key={`black-captured-${piece.type}-${index}`}
-                  className="flex items-center gap-1 rounded bg-white/10 px-2 py-1"
-                >
-                  <img
-                    src={PIECE_IMAGE_MAP[piece.color][piece.type]}
-                    alt={`${piece.color} ${piece.type}`}
-                    className="h-6 w-6 object-contain"
-                  />
-                  <span className="text-[11px] text-white/70">{PIECE_LABEL[piece.type]}</span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+      <div className="mt-4 space-y-2.5">
+        <CapturedRow
+          label="White captures"
+          pieces={capturedByWhite}
+          score={whiteScore}
+          lead={whiteScore > blackScore}
+        />
+        <CapturedRow
+          label="Black captures"
+          pieces={capturedByBlack}
+          score={blackScore}
+          lead={blackScore > whiteScore}
+        />
       </div>
     </>
   );
 
   return (
-    <div
-      className="relative flex h-screen w-screen flex-col overflow-hidden"
-      style={{
-        background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
-        color: "#ffffff",
-      }}
-    >
+    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-[var(--ink)] text-[var(--ivory)]">
       <div ref={containerRef} className="h-full w-full" />
 
-      <style>
-        {`
-          .no-scrollbar::-webkit-scrollbar {
-            display: none;
-          }
-          .no-scrollbar {
-            -ms-overflow-style: none;
-            scrollbar-width: none;
-          }
-        `}
-      </style>
+      {/* Soft vignette so the board reads as a lit stage */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 z-10"
+        style={{
+          background:
+            "radial-gradient(ellipse 70% 60% at 50% 45%, transparent 55%, rgba(13,11,9,0.55) 100%)",
+        }}
+      />
 
-      <div className="pointer-events-none absolute top-4 left-1/2 z-20 w-[90vw] max-w-sm -translate-x-1/2 rounded-full border border-white/10 bg-black/60 px-4 py-2 text-center text-xs text-white md:hidden">
-        {status}
+      <div className="pointer-events-none absolute top-4 left-1/2 z-20 flex w-[90vw] max-w-sm -translate-x-1/2 items-center justify-center gap-2 rounded-full border border-[var(--hairline)] bg-[rgba(13,11,9,0.75)] px-4 py-2 backdrop-blur-xl md:hidden">
+        <span
+          aria-hidden="true"
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+            isLive ? "live-dot bg-[var(--brass)]" : "bg-[var(--ivory-faint)]"
+          }`}
+        />
+        <span className="truncate text-xs text-[var(--ivory-dim)]">{status}</span>
       </div>
-
 
       {isDrawerOpen && (
         <div
@@ -2573,12 +2930,13 @@ export default function Home() {
         }`}
         aria-hidden={!isControlsOpen}
       >
-        <div className="rounded-t-3xl border border-white/10 bg-black/80 p-5 shadow-2xl backdrop-blur-2xl">
+        <div className="panel rounded-t-3xl p-5">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-white/80">LLM Controls</p>
+            <p className="eyebrow">Controls</p>
             <button
               onClick={closeDrawers}
-              className="rounded-full bg-white/10 px-3 py-1 text-xs text-white hover:bg-white/20"
+              className="btn btn-ghost px-3 py-1 text-xs"
+              aria-label="Close controls"
             >
               Close
             </button>
@@ -2595,12 +2953,13 @@ export default function Home() {
         }`}
         aria-hidden={!isLogOpen}
       >
-        <div className="rounded-t-3xl border border-white/10 bg-black/80 p-5 shadow-2xl backdrop-blur-2xl">
+        <div className="panel rounded-t-3xl p-5">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-white/80">Battle Log</p>
+            <p className="eyebrow">Battle Log</p>
             <button
               onClick={closeDrawers}
-              className="rounded-full bg-white/10 px-3 py-1 text-xs text-white hover:bg-white/20"
+              className="btn btn-ghost px-3 py-1 text-xs"
+              aria-label="Close battle log"
             >
               Close
             </button>
@@ -2614,36 +2973,35 @@ export default function Home() {
       <div className="md:hidden fixed inset-x-0 bottom-5 z-30 flex items-center justify-between px-6">
         <button
           onClick={openControlsPanel}
-          className="flex items-center gap-2 rounded-full bg-white/15 px-5 py-3 text-sm font-semibold text-white shadow-xl backdrop-blur"
+          className="btn btn-ghost bg-[rgba(13,11,9,0.8)] px-5 py-3 backdrop-blur-xl"
           aria-label="Open controls"
           tabIndex={0}
           onKeyDown={(event) => handleKeyToggle(event, openControlsPanel)}
         >
-          ⚙️ Controls
+          Controls
         </button>
         <button
           onClick={openLogPanel}
-          className="flex items-center gap-2 rounded-full bg-teal-400/90 px-5 py-3 text-sm font-semibold text-slate-900 shadow-xl backdrop-blur"
+          className="btn btn-primary px-5 py-3"
           aria-label="Open battle log"
           tabIndex={0}
           onKeyDown={(event) => handleKeyToggle(event, openLogPanel)}
         >
-          📜 Log
+          Log
         </button>
       </div>
 
-      <div
-        className="pointer-events-auto absolute left-6 top-6 hidden max-h-[calc(100vh-3rem)] w-[min(24rem,90vw)] flex-col overflow-hidden rounded-xl border border-white/10 bg-black/60 text-sm shadow-2xl backdrop-blur-lg md:flex"
-      >
-        <div className="flex-1 overflow-y-auto p-6 pr-3 no-scrollbar">
+      <div className="panel rise-in pointer-events-auto absolute left-6 top-6 z-20 hidden max-h-[calc(100vh-3rem)] w-[min(23rem,90vw)] flex-col overflow-hidden rounded-2xl text-sm md:flex">
+        <div className="flex-1 overflow-y-auto p-6 no-scrollbar">
           <ControlPanelContent />
         </div>
       </div>
 
       <div
-        className="pointer-events-auto absolute right-6 top-6 hidden max-h-[calc(100vh-3rem)] w-[min(24rem,90vw)] flex-col overflow-hidden rounded-xl border border-white/10 bg-black/60 text-sm shadow-2xl backdrop-blur-lg md:flex"
+        className="panel rise-in pointer-events-auto absolute right-6 top-6 z-20 hidden max-h-[calc(100vh-3rem)] w-[min(22rem,90vw)] flex-col overflow-hidden rounded-2xl text-sm md:flex"
+        style={{ animationDelay: "0.12s" }}
       >
-        <div className="flex-1 overflow-y-auto p-6 pl-3">
+        <div className="flex-1 overflow-y-auto p-6 no-scrollbar">
           <BattleLogContent />
         </div>
       </div>
