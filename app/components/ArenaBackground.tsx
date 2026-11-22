@@ -20,7 +20,8 @@ export default function ArenaBackground() {
     if (!container) return;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0e111a);
+    scene.background = new THREE.Color(0x0d0b09);
+    scene.fog = new THREE.Fog(0x0d0b09, 12, 26);
     sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(
@@ -36,18 +37,20 @@ export default function ArenaBackground() {
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
     renderer.shadowMap.enabled = false;
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xfff2dd, 0.45);
     scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.7);
+    const directionalLight = new THREE.DirectionalLight(0xffe8c4, 0.85);
     directionalLight.position.set(10, 15, 10);
     scene.add(directionalLight);
 
-    const pointLight = new THREE.PointLight(0x4ecdc4, 0.8, 100);
+    const pointLight = new THREE.PointLight(0xd9a441, 1.0, 100);
     pointLight.position.set(0, 8, 0);
     scene.add(pointLight);
 
@@ -56,8 +59,8 @@ export default function ArenaBackground() {
         const isLight = (row + col) % 2 === 0;
         const geometry = new THREE.BoxGeometry(SQUARE_SIZE, 0.2, SQUARE_SIZE);
         const material = new THREE.MeshStandardMaterial({
-          color: isLight ? 0xf1f0ea : 0x6c7a55,
-          roughness: 0.85,
+          color: isLight ? 0xe8dfcd : 0x4a3527,
+          roughness: 0.7,
           metalness: 0.05,
         });
         const square = new THREE.Mesh(geometry, material);
@@ -111,5 +114,5 @@ export default function ArenaBackground() {
     };
   }, []);
 
-  return <div ref={containerRef} className="absolute inset-0 z-0" />;
+  return <div ref={containerRef} className="fixed inset-0 z-0" />;
 }

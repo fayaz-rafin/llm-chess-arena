@@ -1,28 +1,244 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Grandmaster broadcast palette: warm ebony, ivory, tournament brass */
+  --ink: #0d0b09;
+  --ink-raise: #171310;
+  --ivory: #f3ede2;
+  --ivory-dim: #b3a893;
+  --ivory-faint: #7d745f;
+  --brass: #d9a441;
+  --brass-bright: #f0c46a;
+  --oxblood: #b0483c;
+  --sage: #8a9a6b;
+  --hairline: rgba(243, 237, 226, 0.09);
+  --hairline-strong: rgba(243, 237, 226, 0.18);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-ink: var(--ink);
+  --color-ink-raise: var(--ink-raise);
+  --color-ivory: var(--ivory);
+  --color-ivory-dim: var(--ivory-dim);
+  --color-ivory-faint: var(--ivory-faint);
+  --color-brass: var(--brass);
+  --color-brass-bright: var(--brass-bright);
+  --color-oxblood: var(--oxblood);
+  --color-sage: var(--sage);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-mono);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--ink);
+  color: var(--ivory);
+  font-family: var(--font-body), sans-serif;
   margin: 0;
   overflow: hidden;
+}
+
+::selection {
+  background: var(--brass);
+  color: var(--ink);
+}
+
+/* Panel surface: warm smoked glass with a top sheen */
+.panel {
+  background:
+    linear-gradient(180deg, rgba(243, 237, 226, 0.05) 0%, rgba(243, 237, 226, 0) 120px),
+    rgba(13, 11, 9, 0.72);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--hairline);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(243, 237, 226, 0.08);
+}
+
+.panel-title {
+  font-family: var(--font-display), serif;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.eyebrow {
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ivory-faint);
+}
+
+.field {
+  width: 100%;
+  border-radius: 0.625rem;
+  border: 1px solid var(--hairline);
+  background: rgba(243, 237, 226, 0.05);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--ivory);
+  transition: border-color 0.25s ease, background 0.25s ease;
+}
+
+.field::placeholder {
+  color: var(--ivory-faint);
+}
+
+.field:hover:not(:disabled) {
+  border-color: var(--hairline-strong);
+}
+
+.field:focus {
+  outline: none;
+  border-color: rgba(217, 164, 65, 0.55);
+  background: rgba(243, 237, 226, 0.07);
+}
+
+.field:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+select.field option {
+  background: var(--ink-raise);
+  color: var(--ivory);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 0.5rem 1.1rem;
+  min-height: 2.25rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.25s ease, background 0.25s ease, border-color 0.25s ease,
+    color 0.25s ease, opacity 0.25s ease;
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn-primary {
+  background: linear-gradient(180deg, var(--brass-bright), var(--brass));
+  color: var(--ink);
+  box-shadow: 0 2px 12px rgba(217, 164, 65, 0.25);
+}
+
+.btn-primary:hover:not(:disabled) {
+  box-shadow: 0 6px 24px rgba(217, 164, 65, 0.4);
+  transform: translateY(-1px);
+}
+
+.btn-ghost {
+  background: rgba(243, 237, 226, 0.06);
+  border-color: var(--hairline);
+  color: var(--ivory-dim);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(243, 237, 226, 0.11);
+  border-color: var(--hairline-strong);
+  color: var(--ivory);
+}
+
+/* Live status pulse */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.72); }
+}
+
+.live-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+/* Staggered panel entrance */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rise-in {
+  animation: rise-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* New battle-log rows slide in from the side */
+@keyframes log-entry {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.log-entry {
+  animation: log-entry 0.35s cubic-bezier(0.25, 1, 0.5, 1) both;
+}
+
+/* Capture badges and trophy icons pop into place */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.pop-in {
+  animation: pop-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise-in { animation: none; }
+  .live-dot { animation: none; }
+  .log-entry { animation: none; }
+  .pop-in { animation: none; }
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Thin themed scrollbar for logs */
+.log-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.log-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-scroll::-webkit-scrollbar-thumb {
+  background: rgba(243, 237, 226, 0.15);
+  border-radius: 2px;
 }
