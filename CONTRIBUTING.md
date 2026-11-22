@@ -11,11 +11,11 @@ Thanks for your interest in helping build the LLM Chess Arena! This project is o
    ```
 2. **Install dependencies**:
    ```bash
-   npm install
+   pnpm install
    ```
 3. **Run the development server**:
    ```bash
-   npm run dev
+   pnpm dev
    ```
    The app will be available at `http://localhost:3000`.
 
@@ -29,9 +29,10 @@ Thanks for your interest in helping build the LLM Chess Arena! This project is o
    - Follow the established file structure and patterns.
    - Keep components typed and lint-friendly.
    - Add tests when possible (coming soon!).
-3. Run linting and formatting:
+3. Run lint and the production build:
    ```bash
-   npm run lint
+   pnpm lint
+   pnpm build
    ```
 4. Commit with a clear message and push your branch:
    ```bash
