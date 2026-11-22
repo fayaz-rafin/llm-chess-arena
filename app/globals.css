@@ -9,22 +9,11 @@
   --ivory-faint: #7d745f;
   --brass: #d9a441;
   --brass-bright: #f0c46a;
-  --oxblood: #b0483c;
-  --sage: #8a9a6b;
   --hairline: rgba(243, 237, 226, 0.09);
   --hairline-strong: rgba(243, 237, 226, 0.18);
 }
 
 @theme inline {
-  --color-ink: var(--ink);
-  --color-ink-raise: var(--ink-raise);
-  --color-ivory: var(--ivory);
-  --color-ivory-dim: var(--ivory-dim);
-  --color-ivory-faint: var(--ivory-faint);
-  --color-brass: var(--brass);
-  --color-brass-bright: var(--brass-bright);
-  --color-oxblood: var(--oxblood);
-  --color-sage: var(--sage);
   --font-display: var(--font-display);
   --font-sans: var(--font-body);
   --font-mono: var(--font-mono);
