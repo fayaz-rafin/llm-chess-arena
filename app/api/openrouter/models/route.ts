@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAllowedModels, resolveClientId } from "@/app/lib/allowedModels";
-import {
-  fetchOpenRouterModels,
-  OPENROUTER_DEFAULT_BASE_URL,
-} from "@/app/lib/openrouter";
+import { fetchOpenRouterModels } from "@/app/lib/openrouter";
 import { consumeRateLimit } from "@/app/lib/rateLimit";
 
 export const revalidate = 300;
@@ -63,7 +60,7 @@ const handleModelsRequest = async (request: NextRequest) => {
 
   try {
     const models = await loadAllowedModels();
-    return cachedJson({ baseUrl: OPENROUTER_DEFAULT_BASE_URL, models });
+    return cachedJson({ models });
   } catch (error) {
     console.warn("OpenRouter models route error", error);
     return cachedJson(
