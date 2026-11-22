@@ -2596,10 +2596,13 @@ export default function Home() {
         </div>
         <a
           href="/replays"
-          className="btn btn-ghost px-3 py-1.5 text-xs"
-          aria-label="Browse saved replays"
+          className="btn btn-ghost gap-2 px-3 py-1.5 text-xs"
+          aria-label="Replays coming soon"
         >
           Replays
+          <span className="rounded-full bg-[rgba(217,164,65,0.18)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--brass-bright)]">
+            Soon
+          </span>
         </a>
       </div>
 
