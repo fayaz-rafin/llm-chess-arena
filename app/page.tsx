@@ -1129,6 +1129,48 @@ const ModelSideControls = memo(function ModelSideControls({
   );
 });
 
+type CapturedRowProps = {
+  label: string;
+  pieces: Piece[];
+  score: number;
+  lead: boolean;
+};
+
+const CapturedRow = memo(function CapturedRow({
+  label,
+  pieces,
+  score,
+  lead,
+}: CapturedRowProps) {
+  return (
+    <div className="rounded-xl border border-[var(--hairline)] bg-[rgba(243,237,226,0.03)] p-3">
+      <div className="flex items-center justify-between">
+        <p className="eyebrow">{label}</p>
+        <span
+          className={`font-mono text-xs ${
+            lead && score > 0
+              ? "font-semibold text-[var(--brass-bright)]"
+              : "text-[var(--ivory-faint)]"
+          }`}
+        >
+          {score > 0 ? `+${score}` : "—"}
+        </span>
+      </div>
+      <div className="mt-2 flex min-h-7 flex-wrap items-center gap-1">
+        {pieces.map((piece, index) => (
+          <img
+            key={`${label}-${piece.type}-${index}`}
+            src={PIECE_IMAGE_MAP[piece.color][piece.type]}
+            alt={`${piece.color} ${piece.type}`}
+            title={PIECE_LABEL[piece.type]}
+            className="pop-in h-7 w-7 object-contain"
+          />
+        ))}
+      </div>
+    </div>
+  );
+});
+
 const MODEL_PRESETS: ReadonlyArray<ModelPreset> = [
   {
     id: "openrouter-openai-gpt-4o",
@@ -2765,44 +2807,6 @@ export default function Home() {
   const whiteScore = materialScore(capturedByWhite);
   const blackScore = materialScore(capturedByBlack);
 
-  const CapturedRow = ({
-    label,
-    pieces,
-    score,
-    lead,
-  }: {
-    label: string;
-    pieces: Piece[];
-    score: number;
-    lead: boolean;
-  }) => (
-    <div className="rounded-xl border border-[var(--hairline)] bg-[rgba(243,237,226,0.03)] p-3">
-      <div className="flex items-center justify-between">
-        <p className="eyebrow">{label}</p>
-        <span
-          className={`font-mono text-xs ${
-            lead && score > 0
-              ? "font-semibold text-[var(--brass-bright)]"
-              : "text-[var(--ivory-faint)]"
-          }`}
-        >
-          {score > 0 ? `+${score}` : "—"}
-        </span>
-      </div>
-      <div className="mt-2 flex min-h-7 flex-wrap items-center gap-1">
-        {pieces.map((piece, index) => (
-          <img
-            key={`${label}-${piece.type}-${index}`}
-            src={PIECE_IMAGE_MAP[piece.color][piece.type]}
-            alt={`${piece.color} ${piece.type}`}
-            title={PIECE_LABEL[piece.type]}
-            className="pop-in h-7 w-7 object-contain"
-          />
-        ))}
-      </div>
-    </div>
-  );
-
   const BattleLogContent = () => (
     <>
       <div className="flex items-baseline justify-between">
@@ -2926,7 +2930,7 @@ export default function Home() {
             </button>
           </div>
           <div className="mt-4 max-h-[70vh] overflow-y-auto pr-2 no-scrollbar">
-            <ControlPanelContent />
+            {ControlPanelContent()}
           </div>
         </div>
       </div>
@@ -2949,7 +2953,7 @@ export default function Home() {
             </button>
           </div>
           <div className="mt-4 max-h-[70vh] overflow-y-auto pr-2 no-scrollbar">
-            <BattleLogContent />
+            {BattleLogContent()}
           </div>
         </div>
       </div>
@@ -2977,7 +2981,7 @@ export default function Home() {
 
       <div className="panel rise-in pointer-events-auto absolute left-6 top-6 z-20 hidden max-h-[calc(100vh-3rem)] w-[min(23rem,90vw)] flex-col overflow-hidden rounded-2xl text-sm md:flex">
         <div className="flex-1 overflow-y-auto p-6 no-scrollbar">
-          <ControlPanelContent />
+          {ControlPanelContent()}
         </div>
       </div>
 
@@ -2986,7 +2990,7 @@ export default function Home() {
         style={{ animationDelay: "0.12s" }}
       >
         <div className="flex-1 overflow-y-auto p-6 no-scrollbar">
-          <BattleLogContent />
+          {BattleLogContent()}
         </div>
       </div>
     </div>
