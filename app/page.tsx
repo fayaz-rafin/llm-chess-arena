@@ -582,77 +582,6 @@ const boardToAscii = (board: BoardState) =>
     )
     .join("\n");
 
-const formatReplayText = (
-  events: ReplayEvent[],
-  meta: ReplayMeta,
-  endedAt: string,
-  winner: PieceColor,
-  turns: number
-) => {
-  const lines: string[] = [];
-  lines.push("LLM Chess Arena Replay");
-  lines.push(`Start: ${meta.startedAt}`);
-  lines.push(`End: ${endedAt}`);
-  lines.push(`White: ${meta.whiteModel}`);
-  lines.push(`Black: ${meta.blackModel}`);
-  lines.push(`Winner: ${winner}`);
-  lines.push(`Total moves: ${turns}`);
-  lines.push("");
-
-  events.forEach((event) => {
-    switch (event.t) {
-      case "match_start":
-        lines.push(
-          `Match start (${event.at}) | id=${event.clientMatchId} | White=${event.whiteModel} | Black=${event.blackModel}`
-        );
-        break;
-      case "turn_request":
-        lines.push(
-          `Ply ${event.ply}: ${event.turn} to move | model=${event.model} | legalMoves=${event.legalMovesCount}`
-        );
-        lines.push(event.boardAscii);
-        break;
-      case "llm_decision": {
-        const fromSquare = getSquareName(event.move.from[0], event.move.from[1]);
-        const toSquare = getSquareName(event.move.to[0], event.move.to[1]);
-        const flags = [
-          event.fallback ? "fallback" : null,
-          event.rateLimited ? "rate_limited" : null,
-        ]
-          .filter(Boolean)
-          .join(", ");
-        lines.push(
-          `Decision (ply ${event.ply}): ${fromSquare} -> ${toSquare}` +
-            (event.attemptsUsed ? ` | attempts=${event.attemptsUsed}` : "") +
-            (flags ? ` | ${flags}` : "") +
-            (event.note ? ` | note=${event.note}` : "")
-        );
-        break;
-      }
-      case "move": {
-        const fromSquare = getSquareName(event.from[0], event.from[1]);
-        const toSquare = getSquareName(event.to[0], event.to[1]);
-        lines.push(
-          `Move (ply ${event.ply}): ${event.color} ${event.notation} (${fromSquare} -> ${toSquare})`
-        );
-        break;
-      }
-      case "capture":
-        lines.push(
-          `Capture (ply ${event.ply}): ${event.color} captured ${PIECE_LABEL[event.piece]} (value ${event.value})`
-        );
-        break;
-      case "game_over":
-        lines.push(`Game Over: ${event.winner} wins (${event.reason})`);
-        break;
-      default:
-        break;
-    }
-  });
-
-  return lines.join("\n");
-};
-
 const readJson = async <T,>(response: Response): Promise<T> => {
   const text = await response.text();
   if (!text) return {} as T;
@@ -1301,13 +1230,6 @@ export default function Home() {
         winner: game.winner,
         turns: game.moves.length,
         events: replayEventsRef.current,
-        replayText: formatReplayText(
-          replayEventsRef.current,
-          meta,
-          endedAt,
-          game.winner,
-          game.moves.length
-        ),
       };
 
       replaySavedRef.current = true;

@@ -23,7 +23,6 @@ type ReplayPayload = {
   winner?: "white" | "black";
   turns?: number;
   events?: unknown[];
-  replayText?: string;
 };
 
 const isFiniteDate = (value: string) => {
