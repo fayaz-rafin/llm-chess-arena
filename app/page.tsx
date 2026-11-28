@@ -453,7 +453,6 @@ type Move = {
 
 type MoveResponse = {
   move?: Move | null;
-  message?: string;
   attemptsUsed?: number;
   fallback?: boolean;
   rateLimited?: boolean;
@@ -1191,7 +1190,6 @@ export default function Home() {
 
   const [status, setStatus] = useState("Initializing arena...");
   const [isPlaying, setIsPlaying] = useState(false);
-  const [moveLog, setMoveLog] = useState<string[]>([]);
   const [moveHistory, setMoveHistory] = useState<MoveSummary[]>([]);
   const [capturedByWhite, setCapturedByWhite] = useState<Piece[]>([]);
   const [capturedByBlack, setCapturedByBlack] = useState<Piece[]>([]);
@@ -1413,8 +1411,6 @@ export default function Home() {
       const turnLabel = `${game.turn.charAt(0).toUpperCase() + game.turn.slice(1)} to move`;
       setStatus(turnLabel);
     }
-
-    setMoveLog((game.moves.slice(-12) || []).reverse());
   }, []);
 
   // Immediately settle any in-flight tweens for an object (used when a new
