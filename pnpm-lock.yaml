@@ -45,9 +45,6 @@ importers:
       '@types/three':
         specifier: ^0.187.0
         version: 0.187.0
-      baseline-browser-mapping:
-        specifier: ^2.11.39
-        version: 2.11.39
       eslint:
         specifier: ^9.39.5
         version: 9.39.5(jiti@2.7.0)
