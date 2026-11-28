@@ -2326,18 +2326,6 @@ export default function Home() {
   }, [clearPieces, initPieces, resetReplayLog, updateFromGame]);
 
   useEffect(() => {
-    if (!isPlaying) {
-      isPlayingRef.current = false;
-      return;
-    }
-
-    if (sceneReadyRef.current) {
-      isPlayingRef.current = true;
-      playNextTurn();
-    }
-  }, [isPlaying, playNextTurn]);
-
-  useEffect(() => {
     if (moveListRef.current) {
       moveListRef.current.scrollTop = moveListRef.current.scrollHeight;
     }
